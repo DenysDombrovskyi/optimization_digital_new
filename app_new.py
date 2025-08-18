@@ -79,7 +79,7 @@ if submitted:
             top_20_budget_share = ideal_shares_norm * to_allocate_to_top20
             
             # **Виправлена логіка:** використовуємо .values для обох операндів
-            df_result.loc[top_20_indices, 'Budget'] += np.minimum(top_20_budget_share.values, top_20_available_budget.values)
+            df_result.loc[top_20_indices, 'Budget'] += np.minimum(top_20_budget_share, top_20_available_budget.values)
             
             remaining_budget = total_budget - df_result['Budget'].sum()
             
