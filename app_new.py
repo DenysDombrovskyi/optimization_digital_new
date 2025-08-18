@@ -15,7 +15,7 @@ st.title("Digital Split Optimizer – Max Reach + Min Cost оновлений")
 num_instruments = st.number_input("Кількість інструментів:", min_value=1, max_value=50, value=20, step=1)
 total_audience = st.number_input("Загальний розмір потенційної аудиторії:", value=50000, step=1000)
 mode = st.radio("Режим оптимізації:", ["Max Reach (при бюджеті)", "Min Cost (при охопленні)"])
-total_budget = st.number_input("Загальний бюджет ($):", value=100000, step=1000)
+total_budget = st.number_input("Максимальний бюджет ($):", value=100000, step=1000)
 if mode == "Min Cost (при охопленні)":
     target_reach = st.number_input("Цільове охоплення (0-1):", value=0.8, step=0.01)
 
@@ -55,37 +55,23 @@ if submitted:
         reach_i = np.clip(impressions / total_audience, 0, 1)
         return 1 - np.prod(1 - reach_i)
 
-    lambda_balance = 0.2
-
     if mode == "Max Reach (при бюджеті)":
+        lambda_balance = 0.2
         def objective_maxreach(budgets):
             balance_penalty = np.sum((budgets / np.sum(budgets) - eff_weights)**2)
             return - (total_reach(budgets) - lambda_balance * balance_penalty)
 
         res = minimize(objective_maxreach, x0=x0, bounds=bounds, method='SLSQP')
 
-    else:
-        def objective_mincost(budgets):
-            cost = np.sum(budgets)
-            balance_penalty = lambda_balance * np.sum((budgets / np.sum(budgets) - eff_weights)**2) * total_budget
-            impressions = budgets / df["CPM"].values * 1000
-            reach_i = np.clip(impressions / total_audience, 0, 1)
-            reach_prob = 1 - np.prod(1 - reach_i)
-            reach_penalty = 10000 * max(0, target_reach - reach_prob)**2
-            return cost + reach_penalty + balance_penalty
+    else:  # Min Cost (при охопленні) – мінімальний бюджет
+        def objective_min_budget(budgets):
+            return np.sum(budgets)
 
-        def constraint_total_reach(budgets):
+        def constraint_reach(budgets):
             return total_reach(budgets) - target_reach
 
-        def constraint_budget(budgets):
-            return total_budget - np.sum(budgets)
-
-        cons = [
-            {'type': 'ineq', 'fun': constraint_total_reach},
-            {'type': 'ineq', 'fun': constraint_budget}
-        ]
-
-        res = minimize(objective_mincost, x0=x0, bounds=bounds, constraints=cons, method='SLSQP', options={'disp': False})
+        cons = [{'type': 'ineq', 'fun': constraint_reach}]
+        res = minimize(objective_min_budget, x0=x0, bounds=bounds, constraints=cons, method='SLSQP', options={'disp': False})
 
     if res.success:
         df["Budget"] = res.x
