@@ -15,6 +15,7 @@ st.title("Digital Split Optimizer – Max Reach + Min Cost оновлений")
 num_instruments = st.number_input("Кількість інструментів:", min_value=1, max_value=50, value=20, step=1)
 total_audience = st.number_input("Загальний розмір потенційної аудиторії:", value=50000, step=1000)
 mode = st.radio("Режим оптимізації:", ["Max Reach (при бюджеті)", "Min Cost (при охопленні)"])
+# Тут ви вказуєте "заданий бюджет" для естимації
 total_budget = st.number_input("Максимальний бюджет ($):", value=100000, step=1000)
 if mode == "Min Cost (при охопленні)":
     target_reach = st.number_input("Цільове охоплення (0-1):", value=0.8, step=0.01)
