@@ -18,8 +18,7 @@ mode = st.radio("Режим оптимізації:", ["Max Reach (при бюд
 
 if mode == "Max Reach (при бюджеті)":
     total_budget = st.number_input("Заданий бюджет ($):", value=100000, step=1000)
-    lambda_priority = st.slider("Коефіцієнт пріоритету ефективності (0 - рівномірно, 1 - за ефективністю):",
-                                         min_value=0.0, max_value=1.0, value=0.1, step=0.01)
+    max_reach_goal = st.radio("Ціль оптимізації:", ["Максимум охоплення", "Пріоритет ефективності", "Збалансований"])
 else:
     total_budget = st.number_input("Максимальний бюджет ($):", value=100000, step=1000)
     target_reach = st.number_input("Цільове охоплення (0-1):", value=0.8, step=0.01)
@@ -89,16 +88,23 @@ if submitted:
             
             reach = total_reach(budgets)
             
-            # --- Нова частина, яка зважує розподіл за ефективністю ---
+            # Логіка об'єктивної функції залежить від вибору користувача
+            if max_reach_goal == "Максимум охоплення":
+                return -reach
+            
             budget_shares = budgets / total_b
+            eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
             
-            # Розрахунок зваженої частки бюджету
-            # Це буде максимізуватися, якщо бюджети розподілені за ефективністю
-            weighted_budget_shares = np.sum(budget_shares * df["Efficiency"].values)
+            if max_reach_goal == "Пріоритет ефективності":
+                # Винагорода за розподіл на ефективні інструменти
+                # Використовуємо високий фіксований коефіцієнт для сильного пріоритету
+                efficiency_reward = np.sum(budget_shares * eff_weights)
+                return - (reach + 2.0 * efficiency_reward)
             
-            # Об'єднуємо обидві цілі: максимізація охоплення та зважений розподіл
-            # Чим вищий коефіцієнт, тим більший пріоритет ефективності
-            return - (reach + lambda_priority * weighted_budget_shares)
+            if max_reach_goal == "Збалансований":
+                # Штраф за відхилення від збалансованого розподілу
+                balance_penalty = np.sum((budget_shares - eff_weights)**2)
+                return - (reach - 0.2 * balance_penalty)
 
         res = minimize(objective_maxreach, x0=x0, bounds=bounds, constraints=constraints, method='SLSQP')
 
@@ -190,4 +196,4 @@ if submitted:
         file_name="Digital_Split_Result.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-    
+
