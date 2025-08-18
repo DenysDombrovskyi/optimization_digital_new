@@ -55,20 +55,17 @@ if submitted:
         reach_i = np.clip(impressions / total_audience, 0, 1)
         return 1 - np.prod(1 - reach_i)
 
-    def calculate_results(df_to_calc, res, total_budget_calc=None):
-        if res.success:
-            df_to_calc["Budget"] = res.x
-        else:
-            df_to_calc["Budget"] = 0.0
+    def calculate_results(df_to_calc, budgets, total_budget_calc=None):
+        df_to_calc["Budget"] = budgets
         
         if total_budget_calc is None:
             total_budget_calc = df_to_calc["Budget"].sum()
         
         df_to_calc["BudgetSharePct"] = df_to_calc["Budget"] / total_budget_calc
         df_to_calc["Impressions"] = df_to_calc["Budget"] / df_to_calc["CPM"] * 1000
+        df_to_calc["Unique Reach (People)"] = df_to_calc["Impressions"] / df_to_calc["Freq"]
         df_to_calc["ReachPct"] = df_to_calc["Impressions"] / total_audience
         df_to_calc["ReachPct"] = df_to_calc["ReachPct"].clip(upper=1.0)
-        df_to_calc["Unique Reach (People)"] = df_to_calc["Impressions"] / df_to_calc["Freq"]
         total_reach_prob = total_reach(df_to_calc["Budget"].values, df_to_calc)
         
         return df_to_calc, total_reach_prob
@@ -88,7 +85,7 @@ if submitted:
         return weighted_cpm
     
     res_cheapest = minimize(objective_cheapest, x0=x0, bounds=bounds, constraints={'type': 'eq', 'fun': lambda b: np.sum(b) - total_budget}, method='SLSQP')
-    df_cheapest, reach_cheapest = calculate_results(df.copy(), res_cheapest, total_budget)
+    df_cheapest, reach_cheapest = calculate_results(df.copy(), res_cheapest.x, total_budget)
     st.write(f"Total Reach: **{reach_cheapest*100:.2f}%**")
     st.dataframe(df_cheapest[display_cols])
     results['Найдешевший спліт'] = df_cheapest
@@ -123,8 +120,7 @@ if submitted:
         num_instruments_to_keep -= 1
         
     if not best_df.empty:
-        df_pruned = best_df
-        df_pruned, reach_pruned = calculate_results(df_pruned.copy(), res, total_budget)
+        df_pruned, reach_pruned = calculate_results(best_df.copy(), best_df["Budget"].values, total_budget)
         st.write(f"Total Reach: **{reach_pruned*100:.2f}%**")
         st.dataframe(df_pruned[display_cols])
         results['Спліт з відсіканням'] = df_pruned
@@ -141,17 +137,8 @@ if submitted:
     
     res_ideal = minimize(objective_max_reach_unconstrained, x0=x0_ideal, bounds=bounds_ideal, method='SLSQP')
     
-    df_ideal = df.copy()
-    if res_ideal.success:
-        df_ideal["Budget"] = res_ideal.x
-    else:
-        df_ideal["Budget"] = 0.0
-        
-    df_ideal["BudgetSharePct"] = df_ideal["Budget"] / df_ideal["Budget"].sum()
-    df_ideal["Impressions"] = df_ideal["Budget"] / df_ideal["CPM"] * 1000
-    df_ideal["ReachPct"] = df_ideal["ReachPct"].clip(upper=1.0)
-    df_ideal["Unique Reach (People)"] = df_ideal["Impressions"] / df_ideal["Freq"]
-    total_reach_prob_ideal = total_reach(df_ideal["Budget"].values, df_ideal)
+    df_ideal, total_reach_prob_ideal = calculate_results(df.copy(), res_ideal.x)
+    
     st.write(f"Total Reach: **{total_reach_prob_ideal*100:.2f}%**")
     st.write(f"**Бюджет для досягнення ідеального охоплення:** **{df_ideal['Budget'].sum():.2f}$**")
     st.dataframe(df_ideal[display_cols])
@@ -161,44 +148,16 @@ if submitted:
     st.subheader("4. Пропорційний (за CPM) спліт")
     
     df_proportional = df.copy()
-    df_proportional['CPM_Inverse'] = 1 / df_proportional['CPM']
     
+    df_proportional['CPM_Inverse'] = 1 / df_proportional['CPM']
     total_cpm_inverse = df_proportional['CPM_Inverse'].sum()
     df_proportional['TargetShare'] = df_proportional['CPM_Inverse'] / total_cpm_inverse
     
-    df_proportional['Budget'] = total_budget * df_proportional['TargetShare']
+    budgets_prop = df_proportional['TargetShare'] * total_budget
     
-    # Коригування бюджету за обмеженнями
+    df_proportional, reach_proportional = calculate_results(df_proportional, budgets_prop, total_budget)
     
-    # Спочатку обробляємо MinShare
-    min_share_exceed = df_proportional[df_proportional['BudgetSharePct'] < df_proportional['MinShare']]
-    if not min_share_exceed.empty:
-        excess_budget = np.sum(df_proportional['MinShare'] * total_budget) - np.sum(min_share_exceed['Budget'])
-        df_proportional.loc[min_share_exceed.index, 'Budget'] = min_share_exceed['MinShare'] * total_budget
-        
-        remaining_budget_proportional_instruments = df_proportional[df_proportional['BudgetSharePct'] >= df_proportional['MinShare']]
-        remaining_budget = total_budget - np.sum(min_share_exceed['Budget'])
-        
-        remaining_budget_shares = remaining_budget_proportional_instruments['TargetShare'] / np.sum(remaining_budget_proportional_instruments['TargetShare'])
-        df_proportional.loc[remaining_budget_proportional_instruments.index, 'Budget'] = remaining_budget_shares * remaining_budget
-    
-    # Потім обробляємо MaxShare
-    max_share_exceed = df_proportional[df_proportional['BudgetSharePct'] > df_proportional['MaxShare']]
-    if not max_share_exceed.empty:
-        excess_budget = np.sum(max_share_exceed['Budget']) - np.sum(max_share_exceed['MaxShare'] * total_budget)
-        df_proportional.loc[max_share_exceed.index, 'Budget'] = max_share_exceed['MaxShare'] * total_budget
-        
-        remaining_budget_proportional_instruments = df_proportional[df_proportional['BudgetSharePct'] < df_proportional['MaxShare']]
-        remaining_budget_shares = remaining_budget_proportional_instruments['TargetShare'] / np.sum(remaining_budget_proportional_instruments['TargetShare'])
-        df_proportional.loc[remaining_budget_proportional_instruments.index, 'Budget'] += remaining_budget_shares * excess_budget
-    
-    df_proportional["BudgetSharePct"] = df_proportional["Budget"] / df_proportional["Budget"].sum()
-    df_proportional["Impressions"] = df_proportional["Budget"] / df_proportional["CPM"] * 1000
-    df_proportional["Unique Reach (People)"] = df_proportional["Impressions"] / df_proportional["Freq"]
-    df_proportional["ReachPct"] = df_proportional["Unique Reach (People)"] / total_audience
-    total_reach_prob_prop = total_reach(df_proportional["Budget"].values, df_proportional)
-    
-    st.write(f"Total Reach: **{total_reach_prob_prop*100:.2f}%**")
+    st.write(f"Total Reach: **{reach_proportional*100:.2f}%**")
     st.dataframe(df_proportional[display_cols])
     results['Пропорційний спліт'] = df_proportional
     
