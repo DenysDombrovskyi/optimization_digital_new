@@ -66,19 +66,16 @@ if submitted:
 
     else:
         def objective_mincost(budgets):
+            cost = np.sum(budgets)
+            balance_penalty = lambda_balance * np.sum((budgets / np.sum(budgets) - eff_weights)**2) * total_budget
             impressions = budgets / df["CPM"].values * 1000
             reach_i = np.clip(impressions / total_audience, 0, 1)
             reach_prob = 1 - np.prod(1 - reach_i)
-            cost = np.sum(budgets)
             reach_penalty = 10000 * max(0, target_reach - reach_prob)**2
-            balance_penalty = lambda_balance * np.sum((budgets / np.sum(budgets) - eff_weights)**2) * total_budget
             return cost + reach_penalty + balance_penalty
 
         def constraint_total_reach(budgets):
-            impressions = budgets / df["CPM"].values * 1000
-            reach_i = np.clip(impressions / total_audience, 0, 1)
-            reach_prob = 1 - np.prod(1 - reach_i)
-            return reach_prob - target_reach
+            return total_reach(budgets) - target_reach
 
         def constraint_budget(budgets):
             return total_budget - np.sum(budgets)
