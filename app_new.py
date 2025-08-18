@@ -45,7 +45,7 @@ with st.form("instrument_form"):
         df.loc[i, "Instrument"] = st.text_input(f"Назва {i+1}", value=df.loc[i, "Instrument"])
         df.loc[i, "CPM"] = st.number_input(f"CPM {i+1}", value=float(df.loc[i, "CPM"]), step=1.0)
         df.loc[i, "Freq"] = st.number_input(f"Frequency {i+1}", value=float(df.loc[i, "Freq"]), step=0.01)
-        # MinShare and MaxShare are required for both options now
+        # MinShare and MaxShare are now always required
         df.loc[i, "MinShare"] = st.number_input(f"Min Share {i+1}", value=float(df.loc[i, "MinShare"]), step=0.01)
         df.loc[i, "MaxShare"] = st.number_input(f"Max Share {i+1}", value=float(df.loc[i, "MaxShare"]), step=0.01)
     submitted = st.form_submit_button("Перерахувати спліт")
@@ -54,7 +54,9 @@ if submitted:
     st.session_state.df = df.copy()
     
     df["Efficiency"] = 1000 / (df["CPM"] * df["Freq"])
-    df["CPR"] = (df["CPM"] / 1000) * df["Freq"]
+    # Перевірка ділення на нуль
+    df["CPR"] = df["CPM"] / 1000 * df["Freq"]
+    df.loc[df["Freq"] == 0, "CPR"] = np.inf
     
     def total_reach(budgets, df_current):
         impressions = budgets / df_current["CPM"].values * 1000
@@ -65,78 +67,69 @@ if submitted:
     if optimization_goal == 'Мінімізація бюджету':
         
         df_result = df.copy()
+        
+        # Визначаємо мінімальний бюджет на основі MinShare
+        total_min_share = df_result['MinShare'].sum()
+        if total_min_share > 1.0:
+            st.error("Сума MinShare не може перевищувати 100%. Будь ласка, перевірте ваші дані.")
+            st.stop()
+        
+        # Обчислюємо приблизний повний бюджет для MinShare
+        estimated_budget_for_mins = 100000  # Базове значення для розрахунку
+        
+        # Фаза 1: Заповнюємо MinShare. Це наш "обов'язковий" бюджет.
+        df_result['Budget'] = df_result['MinShare'] * estimated_budget_for_mins
+        
+        # Фаза 2: Додаємо бюджет жадібним алгоритмом до досягнення цілі
+        
+        # Сортуємо за CPR для ефективного розподілу залишку
         df_result = df_result.sort_values(by="CPR", ascending=True).reset_index(drop=True)
         
         reach_target_people = total_audience * (reach_target_pct / 100)
-        
-        # Визначаємо бюджет для досягнення MinShare для кожного інструмента
-        # Використовуємо ітераційний підхід для розв'язання циклічної залежності
-        total_budget_guess = 100000  # Початкова оцінка загального бюджету
-        budget_min_shares = (df_result['MinShare'] * total_budget_guess)
-
-        # Фаза 1: Розрахунок початкового бюджету, який забезпечує всі MinShare
-        df_result['Budget'] = 0.0
-        remaining_budget = 0.0
-        
-        # Обчислюємо бюджет, необхідний для досягнення MinShare для кожного інструмента
-        # і який не перевищує його MaxShare
-        
-        # Тут ми спрощуємо, щоб уникнути ітераційного пошуку, і припускаємо
-        # що мінімальний бюджет буде достатнім
-        
-        # Фаза 1: Заповнюємо MinShare. Це наш "обов'язковий" бюджет
-        total_min_share_budget = df_result['MinShare'].sum() * total_budget_guess
-        
-        # Фаза 2: Додаємо бюджет жадібним алгоритмом до досягнення цілі
         current_reach_people = 0
         current_budget = 0
         
-        df_result['Budget'] = 0.0
+        # Розраховуємо охоплення та бюджет, якщо MinShare буде реалізовано
+        initial_impressions = df_result['MinShare'] * estimated_budget_for_mins / df_result['CPM'] * 1000
+        initial_reach = initial_impressions / df_result['Freq']
+        current_reach_people = np.sum(initial_reach.clip(upper=total_audience))
+        current_budget = df_result['Budget'].sum()
+
+        if current_reach_people < reach_target_people:
+            # Розподіляємо залишок бюджету
+            indices_to_distribute_to = df_result.index
+            for index in indices_to_distribute_to:
+                row = df_result.loc[index]
+                if current_reach_people >= reach_target_people:
+                    break
+                
+                # Потенційний бюджет до MaxShare
+                potential_max_budget = row['MaxShare'] * estimated_budget_for_mins
+                budget_to_add = potential_max_budget - row['Budget']
+                
+                # Додаємо бюджет, поки не досягнемо мети або ліміту
+                if budget_to_add > 0:
+                    budget_needed_for_target = (reach_target_people - current_reach_people) * row['CPR']
+                    budget_to_add_actual = min(budget_to_add, budget_needed_for_target)
+                    
+                    df_result.loc[index, 'Budget'] += budget_to_add_actual
+                    current_budget += budget_to_add_actual
+                    current_reach_people += (budget_to_add_actual / row['CPM'] * 1000) / row['Freq']
         
-        for index, row in df_result.iterrows():
-            if row["Freq"] > 0 and row["CPM"] > 0:
-                # Розрахунок повного охоплення та бюджету інструмента
-                potential_reach_instrument = (total_audience * 1000) / (row["CPM"] * row["Freq"])
-                potential_budget_instrument = potential_reach_instrument * row["CPM"] / 1000
-                
-                # Обмеження на рівні частки
-                current_budget_pro_forma = current_budget + potential_budget_instrument
-                max_budget_limit = row['MaxShare'] * current_budget_pro_forma
-                
-                # Розрахунок, скільки потрібно додати, щоб досягти мети
-                needed_reach = reach_target_people - current_reach_people
-                
-                if needed_reach > 0:
-                    if needed_reach <= potential_reach_instrument:
-                        budget_to_add = (needed_reach * row['CPR']) / 1000 if row['CPR'] > 0 else 0
-                        # Обмежуємося MaxShare
-                        df_result.loc[index, 'Budget'] = min(budget_to_add, max_budget_limit)
-                        current_budget += df_result.loc[index, 'Budget']
-                        current_reach_people += (df_result.loc[index, 'Budget'] * 1000) / (row['CPM'] * row['Freq']) if row['CPM'] > 0 and row['Freq'] > 0 else 0
-                        break
-                    else:
-                        budget_to_add = potential_budget_instrument
-                        # Обмежуємося MaxShare
-                        df_result.loc[index, 'Budget'] = min(budget_to_add, max_budget_limit)
-                        current_budget += df_result.loc[index, 'Budget']
-                        current_reach_people += potential_reach_instrument
+        # Фінальне масштабування
+        final_total_budget = df_result['Budget'].sum()
+        if total_reach(df_result['Budget'], df_result) * total_audience < reach_target_people:
+            scaling_factor = reach_target_people / (total_reach(df_result['Budget'], df_result) * total_audience)
+            df_result['Budget'] *= scaling_factor
+            final_total_budget = df_result['Budget'].sum()
         
         # Фінальна перевірка та коригування бюджету
-        final_total_budget = df_result['Budget'].sum()
-        
-        # Перераховуємо всі частки на основі отриманого мінімального бюджету
         df_result["BudgetSharePct"] = df_result["Budget"] / final_total_budget if final_total_budget > 0 else 0
         df_result["Impressions"] = df_result["Budget"] / df_result["CPM"] * 1000
         df_result["Unique Reach (People)"] = df_result["Impressions"] / df_result["Freq"]
         df_result["ReachPct"] = df_result["Unique Reach (People)"] / total_audience
         df_result["ReachPct"] = df_result["ReachPct"].clip(upper=1.0)
 
-        # Перевірка MinShare
-        min_share_not_met = df_result[df_result['BudgetSharePct'] < df_result['MinShare']]
-        
-        if not min_share_not_met.empty:
-            st.warning("Увага: Не вдалося виконати вимоги щодо MinShare. Це може бути пов'язано з тим, що MaxShare занадто низькі або цільовий Reach невеликий.")
-            
         total_reach_prob = total_reach(df_result["Budget"].values, df_result)
         
         st.subheader(f"Результат: Мінімізація бюджету")
@@ -202,17 +195,14 @@ if submitted:
     ws.title = "Гібридний спліт"
     
     # Визначаємо, які колонки виводити в Excel
-    if optimization_goal == 'Мінімізація бюджету':
-        excel_cols = ["Instrument", "CPM", "CPR", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
-    else:
-        excel_cols = ["Instrument", "CPM", "CPR", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
+    excel_cols = ["Instrument", "CPM", "CPR", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
 
     df_to_save = df_result[excel_cols].copy()
     final_total_budget = df_result["Budget"].sum()
     final_total_reach_prob = total_reach(df_result["Budget"].values, df_result)
     final_total_reach_people = final_total_reach_prob * total_audience
 
-    df_to_save.loc[len(df_to_save)] = ["TOTAL", "", "", "", "", "", final_total_budget, 1.0, df_result["Impressions"].sum(), df_result["Unique Reach (People)"].sum(), f"{final_total_reach_prob*100:.2f}%"]
+    df_to_save.loc[len(df_to_save)] = ["TOTAL", "", "", "", df_result['MinShare'].sum(), df_result['MaxShare'].sum(), final_total_budget, 1.0, df_result["Impressions"].sum(), df_result["Unique Reach (People)"].sum(), f"{final_total_reach_prob*100:.2f}%"]
 
     for r in dataframe_to_rows(df_to_save, index=False, header=True):
         ws.append(r)
