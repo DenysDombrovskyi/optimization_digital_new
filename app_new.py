@@ -54,11 +54,13 @@ if submitted:
         bounds = [(df.loc[i, "MinShare"] * total_budget, df.loc[i, "MaxShare"] * total_budget) for i in range(len(df))]
         
     else: # Min Cost (при охопленні)
-        # Більш гнучке початкове значення для Min Cost
+        # Уникаємо рівномірного розподілу: x0 буде пропорційне ефективності
         eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
+        x0 = eff_weights * total_budget  # Задаємо початкове значення, яке вже базується на ефективності
+        
+        # Обмеження розраховуємо на основі min/max share
         min_budgets = df["MinShare"].values * total_budget
         max_budgets = df["MaxShare"].values * total_budget
-        x0 = (min_budgets + max_budgets) / 2 # Починаємо з середини діапазону
         bounds = list(zip(min_budgets, max_budgets))
 
     def total_reach(budgets):
