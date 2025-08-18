@@ -68,14 +68,15 @@ if submitted:
         df_to_calc["Impressions"] = df_to_calc["Budget"] / df_to_calc["CPM"] * 1000
         df_to_calc["ReachPct"] = df_to_calc["Impressions"] / total_audience
         df_to_calc["ReachPct"] = df_to_calc["ReachPct"].clip(upper=1.0)
+        df_to_calc["Unique Reach (People)"] = df_to_calc["Impressions"] / df_to_calc["Freq"]
         total_reach_prob = total_reach(df_to_calc["Budget"].values, df_to_calc)
         
         return df_to_calc, total_reach_prob
 
     results = {}
-    display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Efficiency", "CPR", "Budget", "BudgetSharePct", "Impressions", "ReachPct"]
+    display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Efficiency", "CPR", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
     
-    # ==== Варіант 1: Найдешевший спліт (залежність від ефективності) ====
+    # ==== Варіант 1: Найдешевший спліт (залежність від CPM/CPR) ====
     st.subheader("1. Найдешевший спліт (частки залежать від ефективності)")
     
     def objective_cheapest(budgets):
@@ -83,13 +84,10 @@ if submitted:
         if total_b == 0:
             return float('inf')
         
-        # Визначаємо ідеальний розподіл бюджетів за ефективністю
-        eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
-        budget_shares = budgets / total_b
-        
-        # Мінімізуємо квадрат різниці між фактичними та ідеальними частками
-        deviation = np.sum((budget_shares - eff_weights)**2)
-        return deviation
+        # Мінімізуємо середньозважений CPM/CPR
+        # Це прямо змушує оптимізатор віддавати перевагу найдешевшим інструментам
+        weighted_cpm = np.sum(budgets * df["CPM"].values) / total_b
+        return weighted_cpm
     
     res_cheapest = minimize(objective_cheapest, x0=x0, bounds=bounds, constraints={'type': 'eq', 'fun': lambda b: np.sum(b) - total_budget}, method='SLSQP')
     df_cheapest, reach_cheapest = calculate_results(df.copy(), res_cheapest, total_budget)
@@ -155,6 +153,7 @@ if submitted:
     df_ideal["Impressions"] = df_ideal["Budget"] / df_ideal["CPM"] * 1000
     df_ideal["ReachPct"] = df_ideal["Impressions"] / total_audience
     df_ideal["ReachPct"] = df_ideal["ReachPct"].clip(upper=1.0)
+    df_ideal["Unique Reach (People)"] = df_ideal["Impressions"] / df_ideal["Freq"]
     total_reach_prob_ideal = total_reach(df_ideal["Budget"].values, df_ideal)
     st.write(f"Total Reach: **{total_reach_prob_ideal*100:.2f}%**")
     st.write(f"**Бюджет для досягнення ідеального охоплення:** **{df_ideal['Budget'].sum():.2f}$**")
@@ -176,8 +175,8 @@ if submitted:
         total_reach_people = total_reach_prob * total_audience
         
         ws.append([])
-        ws.append(["TOTAL", "", "", "", "", "", "", total_budget_sum, 1.0, total_impressions_sum, f"{total_reach_prob*100:.2f}%"])
-        ws.append(["TOTAL PEOPLE", "", "", "", "", "", "", "", "", int(total_reach_people)])
+        ws.append(["TOTAL", "", "", "", "", "", "", total_budget_sum, 1.0, total_impressions_sum, np.sum(result_df["Unique Reach (People)"]), f"{total_reach_prob*100:.2f}%"])
+        ws.append(["TOTAL PEOPLE", "", "", "", "", "", "", "", "", "", int(total_reach_people)])
         
         for row in ws.iter_rows(min_row=2, max_row=1+len(result_df), min_col=9, max_col=9):
             for cell in row:
@@ -206,3 +205,4 @@ if submitted:
         file_name="Digital_Split_3_Options.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
