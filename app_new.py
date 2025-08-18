@@ -45,9 +45,23 @@ with st.form("instrument_form"):
 if submitted:
     st.session_state.df = df.copy()
     df["Efficiency"] = 1000 / (df["CPM"] * df["Freq"])
-    eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
-    x0 = df["MinShare"].values * total_budget + \
-         (df["MaxShare"].values - df["MinShare"].values) * total_budget * eff_weights
+    
+    # Визначення початкового значення x0 в залежності від режиму
+    if mode == "Max Reach (при бюджеті)":
+        eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
+        x0 = df["MinShare"].values * total_budget + \
+             (df["MaxShare"].values - df["MinShare"].values) * total_budget * eff_weights
+    else: # Min Cost (при охопленні)
+        # Більш гнучке початкове значення для Min Cost
+        # Воно буде пропорційне ефективності
+        eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
+        min_budget_sum = (df["MinShare"].values * total_budget).sum()
+        if min_budget_sum > total_budget:
+            x0 = df["MinShare"].values * total_budget
+        else:
+            remaining_budget = total_budget - min_budget_sum
+            x0 = df["MinShare"].values * total_budget + eff_weights * remaining_budget
+
     bounds = [(df.loc[i, "MinShare"] * total_budget, df.loc[i, "MaxShare"] * total_budget) for i in range(len(df))]
 
     def total_reach(budgets):
@@ -68,13 +82,15 @@ if submitted:
             return np.sum(budgets)
 
         def constraint_reach(budgets):
-            # Перевіряємо, чи досягнуто цільове охоплення
             return total_reach(budgets) - target_reach
 
-        # Обмеження накладаємо на нерівність, що охоплення має бути більше або дорівнювати цільовому
         cons = [{'type': 'ineq', 'fun': constraint_reach}]
         
-        # Використовуємо SLSQP з обмеженнями
+        # Перераховуємо bounds, щоб вони відповідали режиму min_cost, де total_budget - це просто верхня межа
+        min_budgets = df["MinShare"].values * total_budget
+        max_budgets = df["MaxShare"].values * total_budget
+        bounds = [(min_budgets[i], max_budgets[i]) for i in range(len(df))]
+
         res = minimize(objective_min_budget, x0=x0, bounds=bounds, constraints=cons, method='SLSQP', options={'disp': False})
 
     if res.success:
