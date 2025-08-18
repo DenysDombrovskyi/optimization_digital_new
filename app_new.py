@@ -53,36 +53,43 @@ if submitted:
     # Розподіл бюджету за гібридним алгоритмом
     df_result = df.copy()
     
-    # 1. Виділення груп: перші 20 інструментів отримують ранжований спліт
+    # 1. Виділення груп
     num_top_instruments = min(20, len(df_result))
     top_20_indices = df_result.iloc[:num_top_instruments].index
     rest_indices = df_result.iloc[num_top_instruments:].index
-    
-    # 2. Розрахунок бюджету для групи "rest"
+
+    # 2. Розрахунок мінімального бюджету для всіх
     df_result['Budget'] = df_result['MinShare'] * total_budget
+
+    # **Нова логіка:** Виділяємо максимальний бюджет найдешевшому інструменту
+    cheapest_instrument_index = df_result.index[0]
+    df_result.loc[cheapest_instrument_index, 'Budget'] = df_result.loc[cheapest_instrument_index, 'MaxShare'] * total_budget
+    
+    # 3. Розрахунок доступного бюджету для розподілу між іншими інструментами
     remaining_budget = total_budget - df_result['Budget'].sum()
 
-    # 3. Розподіл додаткового бюджету на групу "top_20"
-    if not top_20_indices.empty and remaining_budget > 0:
+    # 4. Розподіл додаткового бюджету на групу "top_20" (крім найдешевшого)
+    top_20_other_indices = top_20_indices[1:]
+    
+    if not top_20_other_indices.empty and remaining_budget > 0:
         
-        # **Оновлена логіка:** крок залежить від CPM
-        ideal_shares = 1 / df_result.loc[top_20_indices, 'CPM']
+        ideal_shares = 1 / df_result.loc[top_20_other_indices, 'CPM']
         ideal_shares_norm = ideal_shares / ideal_shares.sum()
         
-        top_20_max_budget = df_result.loc[top_20_indices, 'MaxShare'] * total_budget
-        top_20_current_budget = df_result.loc[top_20_indices, 'Budget']
-        top_20_available_budget = top_20_max_budget - top_20_current_budget
+        top_20_other_max_budget = df_result.loc[top_20_other_indices, 'MaxShare'] * total_budget
+        top_20_other_current_budget = df_result.loc[top_20_other_indices, 'Budget']
+        top_20_other_available_budget = top_20_other_max_budget - top_20_other_current_budget
         
-        to_allocate_to_top20 = min(remaining_budget, top_20_available_budget.sum())
+        to_allocate_to_top20 = min(remaining_budget, top_20_other_available_budget.sum())
         
         if to_allocate_to_top20 > 0:
             top_20_budget_share = ideal_shares_norm * to_allocate_to_top20
             
-            df_result.loc[top_20_indices, 'Budget'] += np.minimum(top_20_budget_share.values, top_20_available_budget.values)
+            df_result.loc[top_20_other_indices, 'Budget'] += np.minimum(top_20_budget_share.values, top_20_other_available_budget.values)
             
             remaining_budget = total_budget - df_result['Budget'].sum()
             
-    # 4. Рівномірний розподіл залишку на групу "rest"
+    # 5. Рівномірний розподіл залишку на групу "rest"
     if not rest_indices.empty and remaining_budget > 0:
         rest_available_indices = rest_indices[df_result.loc[rest_indices, 'Budget'] < df_result.loc[rest_indices, 'MaxShare'] * total_budget]
         
