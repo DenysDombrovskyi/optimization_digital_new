@@ -63,7 +63,7 @@ if submitted:
     # 3. Розрахунок доступного бюджету для розподілу між іншими інструментами
     remaining_budget = total_budget - df_result['Budget'].sum()
 
-    # 4. Розподіл залишку на основі різниці CPM для всіх, хто не досяг максимуму
+    # 4. Розподіл залишку на основі логарифмічної функції для всіх, хто не досяг максимуму
     if remaining_budget > 0:
         
         indices_to_distribute_to = df_result.index[df_result['Budget'] < df_result['MaxShare'] * total_budget]
@@ -72,8 +72,10 @@ if submitted:
             
             cheapest_cpm = df_result.loc[cheapest_instrument_index, 'CPM']
             
-            cpm_difference = df_result.loc[indices_to_distribute_to, 'CPM'] - cheapest_cpm
-            ideal_shares = 1 / (cpm_difference + 1)
+            # Використовуємо логарифм для згладжування
+            cpm_ratio = df_result.loc[indices_to_distribute_to, 'CPM'] / cheapest_cpm
+            # Захист від log(1) == 0, додаємо невелике число
+            ideal_shares = 1 / (np.log(cpm_ratio) + 1e-9)
             
             ideal_shares_norm = ideal_shares / ideal_shares.sum()
             
@@ -98,7 +100,7 @@ if submitted:
     total_reach_prob = total_reach(df_result["Budget"].values, df_result)
     total_reach_people = total_reach_prob * total_audience
 
-    st.subheader("Гібридний спліт (Фінальне перезважування)")
+    st.subheader("Гібридний спліт (Логарифмічний розподіл)")
     st.write(f"Total Reach: **{total_reach_prob*100:.2f}%**")
     
     display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
