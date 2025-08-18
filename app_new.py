@@ -15,6 +15,15 @@ num_instruments = st.number_input("Кількість інструментів:"
 total_audience = st.number_input("Загальний розмір потенційної аудиторії:", value=50000, step=1000)
 total_budget = st.number_input("Заданий бюджет ($):", value=100000, step=1000)
 
+# Додано перемикач варіантів
+st.markdown("---")
+optimization_goal = st.radio(
+    "Оберіть мету оптимізації:",
+    ('Варіант 1 (За CPM)', 'Варіант 2 (За CPR)'),
+    horizontal=True
+)
+st.markdown("---")
+
 # ==== Початкові дані ====
 if "df" not in st.session_state or len(st.session_state.df) != num_instruments:
     st.session_state.df = pd.DataFrame({
@@ -43,7 +52,11 @@ if submitted:
     
     df["Efficiency"] = 1000 / (df["CPM"] * df["Freq"])
     df["CPR"] = (df["CPM"] / 1000) * (df["Freq"] * total_audience) / total_audience
-    df = df.sort_values(by="CPM", ascending=True).reset_index(drop=True)
+    
+    # Визначаємо, за яким показником сортувати
+    sort_by_column = 'CPM' if optimization_goal == 'Варіант 1 (За CPM)' else 'CPR'
+    
+    df = df.sort_values(by=sort_by_column, ascending=True).reset_index(drop=True)
     
     def total_reach(budgets, df_current):
         impressions = budgets / df_current["CPM"].values * 1000
@@ -56,27 +69,23 @@ if submitted:
     # 1. Розрахунок мінімального бюджету для всіх
     df_result['Budget'] = df_result['MinShare'] * total_budget
 
-    # 2. Виділяємо максимальний бюджет найдешевшому інструменту
+    # 2. Виділяємо максимальний бюджет найдешевшому інструменту (за обраним показником)
     cheapest_instrument_index = df_result.index[0]
     df_result.loc[cheapest_instrument_index, 'Budget'] = df_result.loc[cheapest_instrument_index, 'MaxShare'] * total_budget
     
     # 3. Розрахунок доступного бюджету для розподілу між іншими інструментами
     remaining_budget = total_budget - df_result['Budget'].sum()
 
-    # 4. Розподіл залишку на основі CPM для всіх, хто не досяг максимуму
+    # 4. Розподіл залишку на основі обраного показника для всіх, хто не досяг максимуму
     if remaining_budget > 0:
         
-        # Визначаємо інструменти, які можуть отримати додатковий бюджет
-        # Це всі, крім найдешевшого, який вже отримав свій максимум
         indices_to_distribute_to = df_result.index[1:]
         
-        # Виключаємо інструменти, які вже досягли максимуму
         indices_to_distribute_to = indices_to_distribute_to[df_result.loc[indices_to_distribute_to, 'Budget'] < df_result.loc[indices_to_distribute_to, 'MaxShare'] * total_budget]
         
         if len(indices_to_distribute_to) > 0:
             
-            # Логіка: розподіл залишку за оберненою пропорцією CPM
-            ideal_shares = 1 / df_result.loc[indices_to_distribute_to, 'CPM']
+            ideal_shares = 1 / df_result.loc[indices_to_distribute_to, sort_by_column]
             ideal_shares_norm = ideal_shares / ideal_shares.sum()
             
             available_budget = (df_result.loc[indices_to_distribute_to, 'MaxShare'] * total_budget - df_result.loc[indices_to_distribute_to, 'Budget'])
@@ -100,10 +109,10 @@ if submitted:
     total_reach_prob = total_reach(df_result["Budget"].values, df_result)
     total_reach_people = total_reach_prob * total_audience
 
-    st.subheader("Гібридний спліт (Оновлений розподіл)")
+    st.subheader(f"Гібридний спліт ({optimization_goal})")
     st.write(f"Total Reach: **{total_reach_prob*100:.2f}%**")
     
-    display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
+    display_cols = ["Instrument", "CPM", "CPR", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
     st.dataframe(df_result[display_cols])
 
     # ==== Завантаження результатів у Excel ====
@@ -116,10 +125,10 @@ if submitted:
         ws.append(r)
     
     ws.append([])
-    ws.append(["TOTAL", "", "", "", "", df_result["Budget"].sum(), 1.0, df_result["Impressions"].sum(), df_result["Unique Reach (People)"].sum(), f"{total_reach_prob*100:.2f}%"])
-    ws.append(["TOTAL PEOPLE", "", "", "", "", "", "", "", int(total_reach_people), ""])
+    ws.append(["TOTAL", "", "", "", "", "", df_result["Budget"].sum(), 1.0, df_result["Impressions"].sum(), df_result["Unique Reach (People)"].sum(), f"{total_reach_prob*100:.2f}%"])
+    ws.append(["TOTAL PEOPLE", "", "", "", "", "", "", "", "", int(total_reach_people), ""])
     
-    for row in ws.iter_rows(min_row=2, max_row=1+len(df_result), min_col=7, max_col=7):
+    for row in ws.iter_rows(min_row=2, max_row=1+len(df_result), min_col=8, max_col=8):
         for cell in row:
             cell.number_format = '0.00%'
             
@@ -128,7 +137,7 @@ if submitted:
     chart.title = "Бюджет по інструментам (%)"
     chart.y_axis.title = "Budget Share (%)"
     chart.x_axis.title = "Інструменти"
-    data = Reference(ws, min_col=7, min_row=1, max_row=1+len(df_result))
+    data = Reference(ws, min_col=8, min_row=1, max_row=1+len(df_result))
     categories = Reference(ws, min_col=1, min_row=2, max_row=1+len(df_result))
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(categories)
