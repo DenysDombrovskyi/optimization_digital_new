@@ -65,8 +65,8 @@ if submitted:
     # 3. Розподіл додаткового бюджету на групу "top_20"
     if not top_20_indices.empty and remaining_budget > 0:
         
-        ranks = np.arange(1, len(top_20_indices) + 1)
-        ideal_shares = 1 / ranks
+        # **Оновлена логіка:** крок залежить від CPM
+        ideal_shares = 1 / df_result.loc[top_20_indices, 'CPM']
         ideal_shares_norm = ideal_shares / ideal_shares.sum()
         
         top_20_max_budget = df_result.loc[top_20_indices, 'MaxShare'] * total_budget
@@ -78,8 +78,7 @@ if submitted:
         if to_allocate_to_top20 > 0:
             top_20_budget_share = ideal_shares_norm * to_allocate_to_top20
             
-            # **Виправлена логіка:** використовуємо .values для обох операндів
-            df_result.loc[top_20_indices, 'Budget'] += np.minimum(top_20_budget_share, top_20_available_budget.values)
+            df_result.loc[top_20_indices, 'Budget'] += np.minimum(top_20_budget_share.values, top_20_available_budget.values)
             
             remaining_budget = total_budget - df_result['Budget'].sum()
             
