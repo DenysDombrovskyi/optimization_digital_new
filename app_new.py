@@ -56,8 +56,8 @@ if submitted:
     
     # 1. Виділення груп
     num_top_instruments = min(10, len(df_result))
-    top_10_df = df_result.iloc[:num_top_instruments]
-    rest_df = df_result.iloc[num_top_instruments:]
+    top_10_indices = df_result.iloc[:num_top_instruments].index
+    rest_indices = df_result.iloc[num_top_instruments:].index
     
     # 2. Розрахунок бюджету для групи "rest"
     # Спочатку, виділяємо мінімальний бюджет для всіх інструментів
@@ -67,16 +67,17 @@ if submitted:
     remaining_budget = total_budget - df_result['Budget'].sum()
 
     # 3. Розподіл додаткового бюджету на групу "top_10"
-    if not top_10_df.empty and remaining_budget > 0:
+    if not top_10_indices.empty and remaining_budget > 0:
         
         # Створюємо цільові долі на основі ранжування CPM
-        ranks = np.arange(1, len(top_10_df) + 1)
+        ranks = np.arange(1, len(top_10_indices) + 1)
         ideal_shares = 1 / ranks
         ideal_shares_norm = ideal_shares / ideal_shares.sum()
         
         # Обчислюємо скільки бюджету можна додати, враховуючи MaxShare
-        top_10_max_budget = top_10_df['MaxShare'] * total_budget
-        top_10_available_budget = top_10_max_budget - top_10_df['Budget']
+        top_10_max_budget = df_result.loc[top_10_indices, 'MaxShare'] * total_budget
+        top_10_current_budget = df_result.loc[top_10_indices, 'Budget']
+        top_10_available_budget = top_10_max_budget - top_10_current_budget
         
         # Оптимізуємо розподіл всередині top_10
         top_10_allocatable_budget = top_10_available_budget.sum()
@@ -86,14 +87,14 @@ if submitted:
             top_10_budget_share = ideal_shares_norm * to_allocate_to_top10
             
             # Додаємо бюджет, але не перевищуємо MaxShare
-            df_result.loc[top_10_df.index, 'Budget'] += np.minimum(top_10_budget_share.values, top_10_available_budget.values)
+            df_result.loc[top_10_indices, 'Budget'] += np.minimum(top_10_budget_share.values, top_10_available_budget.values)
             
             remaining_budget = total_budget - df_result['Budget'].sum()
             
     # 4. Рівномірний розподіл залишку на групу "rest"
-    if not rest_df.empty and remaining_budget > 0:
+    if not rest_indices.empty and remaining_budget > 0:
         # Визначаємо інструменти, які можуть отримати додатковий бюджет
-        rest_available_indices = rest_df[rest_df['Budget'] < rest_df['MaxShare'] * total_budget].index
+        rest_available_indices = rest_indices[(df_result.loc[rest_indices, 'Budget'] < df_result.loc[rest_indices, 'MaxShare'] * total_budget)]
         
         if len(rest_available_indices) > 0:
             uniform_share = remaining_budget / len(rest_available_indices)
