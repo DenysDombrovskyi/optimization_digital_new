@@ -44,9 +44,13 @@ with st.form("instrument_form"):
 
 if submitted:
     st.session_state.df = df.copy()
-    df["Efficiency"] = 1000 / (df["CPM"] * df["Freq"])
     
-    # Визначення початкового значення x0 в залежності від режиму
+    # Розрахунок ефективності та CPR
+    df["Efficiency"] = 1000 / (df["CPM"] * df["Freq"])
+    df["CPR"] = (df["CPM"] / 1000) * (df["Freq"] * total_audience) / total_audience
+    df = df.sort_values(by="CPR", ascending=True).reset_index(drop=True)
+    
+    # Визначення початкового значення x0 та меж
     if mode == "Max Reach (при бюджеті)":
         eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
         x0 = df["MinShare"].values * total_budget + \
@@ -54,11 +58,14 @@ if submitted:
         bounds = [(df.loc[i, "MinShare"] * total_budget, df.loc[i, "MaxShare"] * total_budget) for i in range(len(df))]
         
     else: # Min Cost (при охопленні)
-        # Уникаємо рівномірного розподілу: x0 буде пропорційне ефективності
-        eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
-        x0 = eff_weights * total_budget  # Задаємо початкове значення, яке вже базується на ефективності
+        # Початкове значення пропорційне "оберненій" CPR, щоб пріоритизувати найдешевші інструменти
+        cpr_weights = (1 / df["CPR"]).values
+        cpr_weights_normalized = cpr_weights / cpr_weights.sum()
         
-        # Обмеження розраховуємо на основі min/max share
+        # Ми починаємо з розподілу, який схиляється до найдешевших інструментів
+        x0 = cpr_weights_normalized * total_budget
+        
+        # Межі залишаються на основі MinShare та MaxShare
         min_budgets = df["MinShare"].values * total_budget
         max_budgets = df["MaxShare"].values * total_budget
         bounds = list(zip(min_budgets, max_budgets))
@@ -84,7 +91,7 @@ if submitted:
             return total_reach(budgets) - target_reach
 
         cons = [{'type': 'ineq', 'fun': constraint_reach}]
-
+        
         res = minimize(objective_min_budget, x0=x0, bounds=bounds, constraints=cons, method='SLSQP', options={'disp': False})
 
     if res.success:
@@ -101,7 +108,7 @@ if submitted:
     total_reach_prob = 1 - np.prod(1 - df["ReachPct"])
     total_reach_people = total_reach_prob * total_audience
 
-    display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Efficiency", "Budget", "BudgetSharePct", "Impressions", "ReachPct"]
+    display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Efficiency", "CPR", "Budget", "BudgetSharePct", "Impressions", "ReachPct"]
     st.subheader(f"Розрахунок спліту (Total Audience={total_audience})")
     st.dataframe(df[display_cols])
     st.write(f"Total Reach (ймовірність): {total_reach_prob*100:.2f}%")
@@ -120,10 +127,10 @@ if submitted:
     total_budget_sum = df["Budget"].sum()
     total_impressions_sum = df["Impressions"].sum()
     ws.append([])
-    ws.append(["TOTAL", "", "", "", "", "", total_budget_sum, 1.0, total_impressions_sum, f"{total_reach_prob*100:.2f}%"])
+    ws.append(["TOTAL", "", "", "", "", "", "", total_budget_sum, 1.0, total_impressions_sum, f"{total_reach_prob*100:.2f}%"])
     ws.append(["TOTAL PEOPLE", "", "", "", "", "", "", "", int(total_reach_people)])
 
-    for row in ws.iter_rows(min_row=2, max_row=1+len(df), min_col=8, max_col=8):
+    for row in ws.iter_rows(min_row=2, max_row=1+len(df), min_col=9, max_col=9):
         for cell in row:
             cell.number_format = '0.00%'
 
@@ -132,12 +139,12 @@ if submitted:
     chart.title = "Бюджет по інструментам (%)"
     chart.y_axis.title = "Budget Share (%)"
     chart.x_axis.title = "Інструменти"
-    data = Reference(ws, min_col=8, min_row=1, max_row=1+len(df))
+    data = Reference(ws, min_col=9, min_row=1, max_row=1+len(df))
     categories = Reference(ws, min_col=1, min_row=2, max_row=1+len(df))
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(categories)
     chart.shape = 4
-    ws.add_chart(chart, "K2")
+    ws.add_chart(chart, "L2")
 
     wb.save(output)
     output.seek(0)
