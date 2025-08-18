@@ -80,13 +80,12 @@ if submitted:
         top_10_available_budget = top_10_max_budget - top_10_current_budget
         
         # Оптимізуємо розподіл всередині top_10
-        top_10_allocatable_budget = top_10_available_budget.sum()
-        to_allocate_to_top10 = min(remaining_budget, top_10_allocatable_budget)
+        to_allocate_to_top10 = min(remaining_budget, top_10_available_budget.sum())
         
         if to_allocate_to_top10 > 0:
             top_10_budget_share = ideal_shares_norm * to_allocate_to_top10
             
-            # Додаємо бюджет, але не перевищуємо MaxShare
+            # Додаємо бюджет, але не перевищуємо MaxShare, використовуючи .values для уникнення проблем з індексом
             df_result.loc[top_10_indices, 'Budget'] += np.minimum(top_10_budget_share.values, top_10_available_budget.values)
             
             remaining_budget = total_budget - df_result['Budget'].sum()
@@ -94,7 +93,7 @@ if submitted:
     # 4. Рівномірний розподіл залишку на групу "rest"
     if not rest_indices.empty and remaining_budget > 0:
         # Визначаємо інструменти, які можуть отримати додатковий бюджет
-        rest_available_indices = rest_indices[(df_result.loc[rest_indices, 'Budget'] < df_result.loc[rest_indices, 'MaxShare'] * total_budget)]
+        rest_available_indices = rest_indices[df_result.loc[rest_indices, 'Budget'] < df_result.loc[rest_indices, 'MaxShare'] * total_budget]
         
         if len(rest_available_indices) > 0:
             uniform_share = remaining_budget / len(rest_available_indices)
