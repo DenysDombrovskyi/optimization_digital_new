@@ -71,8 +71,9 @@ if submitted:
         
         if len(indices_to_distribute_to) > 0:
             
-            # **Оновлена логіка:** крок залежить від CPM для всіх інструментів
-            ideal_shares = 1 / df_result.loc[indices_to_distribute_to, 'CPM']
+            # **Оновлена логіка:** крок залежить від співвідношення CPM до найдешевшого
+            cheapest_cpm = df_result.loc[cheapest_instrument_index, 'CPM']
+            ideal_shares = cheapest_cpm / df_result.loc[indices_to_distribute_to, 'CPM']
             ideal_shares_norm = ideal_shares / ideal_shares.sum()
             
             available_budget = (df_result.loc[indices_to_distribute_to, 'MaxShare'] * total_budget - df_result.loc[indices_to_distribute_to, 'Budget'])
