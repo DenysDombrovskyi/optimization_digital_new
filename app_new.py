@@ -21,7 +21,6 @@ if mode == "Min Cost (при охопленні)":
     lambda_balance = st.slider("Коефіцієнт балансу (0 - менш збалансований, 1 - більш збалансований):",
                                min_value=0.0, max_value=1.0, value=0.1, step=0.01)
 
-
 # ==== Початкові дані ====
 if "df" not in st.session_state or len(st.session_state.df) != num_instruments:
     st.session_state.df = pd.DataFrame({
@@ -61,11 +60,14 @@ if submitted:
         bounds = [(df.loc[i, "MinShare"] * total_budget, df.loc[i, "MaxShare"] * total_budget) for i in range(len(df))]
         
     else: # Min Cost (при охопленні)
+        # Створюємо початкове значення, де бюджет розподіляється за рангом CPR
         cpr_weights = (1 / df["CPR"]).values
         cpr_weights_normalized = cpr_weights / cpr_weights.sum()
         
+        # Початкове значення x0, що ігнорує Min/MaxShare, щоб дати оптимізатору сильний сигнал
         x0 = cpr_weights_normalized * total_budget
         
+        # Межі залишаються на основі MinShare та MaxShare
         min_budgets = df["MinShare"].values * total_budget
         max_budgets = df["MaxShare"].values * total_budget
         bounds = list(zip(min_budgets, max_budgets))
@@ -76,28 +78,28 @@ if submitted:
         return 1 - np.prod(1 - reach_i)
 
     if mode == "Max Reach (при бюджеті)":
-        lambda_balance = 0.2
+        lambda_balance_max_reach = 0.2
         def objective_maxreach(budgets):
             eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
             balance_penalty = np.sum((budgets / np.sum(budgets) - eff_weights)**2)
-            return - (total_reach(budgets) - lambda_balance * balance_penalty)
+            return - (total_reach(budgets) - lambda_balance_max_reach * balance_penalty)
 
         res = minimize(objective_maxreach, x0=x0, bounds=bounds, method='SLSQP')
 
     else:  # Min Cost (при охопленні)
-        # Оновлена цільова функція з урахуванням штрафу за дисбаланс
         def objective_min_budget_with_balance(budgets):
             total_b = np.sum(budgets)
             if total_b == 0:
                 return float('inf')
             
-            # Розрахунок штрафу за дисбаланс
+            # Розрахунок штрафу за дисбаланс, базуючись на CPR
             budget_shares = budgets / total_b
             cpr_weights_normalized = (1 / df["CPR"]).values / (1 / df["CPR"]).sum()
             balance_penalty = np.sum((budget_shares - cpr_weights_normalized)**2)
             
-            return total_b + lambda_balance * balance_penalty
-
+            # Оновлена цільова функція: мінімізуємо суму бюджетів + штраф
+            return total_b + lambda_balance * total_b * balance_penalty
+        
         def constraint_reach(budgets):
             return total_reach(budgets) - target_reach
 
