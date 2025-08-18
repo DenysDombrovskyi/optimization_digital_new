@@ -46,7 +46,6 @@ if submitted:
     df["CPR"] = (df["CPM"] / 1000) * (df["Freq"] * total_audience) / total_audience
     df = df.sort_values(by="CPR", ascending=True).reset_index(drop=True)
     
-    # Визначення початкових значень та обмежень
     x0 = df["MinShare"].values * total_budget + \
          (df["MaxShare"].values - df["MinShare"].values) * total_budget / len(df)
     bounds = [(df.loc[i, "MinShare"] * total_budget, df.loc[i, "MaxShare"] * total_budget) for i in range(len(df))]
@@ -76,14 +75,21 @@ if submitted:
     results = {}
     display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Efficiency", "CPR", "Budget", "BudgetSharePct", "Impressions", "ReachPct"]
     
-    # ==== Варіант 1: Найдешевший спліт ====
-    st.subheader("1. Найдешевший спліт (максимізація ефективності)")
+    # ==== Варіант 1: Найдешевший спліт (залежність від ефективності) ====
+    st.subheader("1. Найдешевший спліт (частки залежать від ефективності)")
+    
     def objective_cheapest(budgets):
         total_b = np.sum(budgets)
         if total_b == 0:
             return float('inf')
-        weighted_cpr = np.sum(budgets * df["CPR"].values) / total_b
-        return weighted_cpr
+        
+        # Визначаємо ідеальний розподіл бюджетів за ефективністю
+        eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
+        budget_shares = budgets / total_b
+        
+        # Мінімізуємо квадрат різниці між фактичними та ідеальними частками
+        deviation = np.sum((budget_shares - eff_weights)**2)
+        return deviation
     
     res_cheapest = minimize(objective_cheapest, x0=x0, bounds=bounds, constraints={'type': 'eq', 'fun': lambda b: np.sum(b) - total_budget}, method='SLSQP')
     df_cheapest, reach_cheapest = calculate_results(df.copy(), res_cheapest, total_budget)
@@ -134,8 +140,7 @@ if submitted:
     def objective_max_reach_unconstrained(budgets):
         return -total_reach(budgets, df)
     
-    # Встановлюємо початкові значення та обмеження. Тільки MinShare та відсутність обмеження на суму
-    x0_ideal = df["MinShare"].values * 10000 # Початкова оцінка
+    x0_ideal = df["MinShare"].values * 10000 
     bounds_ideal = [(df.loc[i, "MinShare"] * total_budget, None) for i in range(len(df))]
     
     res_ideal = minimize(objective_max_reach_unconstrained, x0=x0_ideal, bounds=bounds_ideal, method='SLSQP')
