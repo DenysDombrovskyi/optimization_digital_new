@@ -71,9 +71,10 @@ if submitted:
         
         if len(indices_to_distribute_to) > 0:
             
-            # **Оновлена логіка:** крок залежить від співвідношення CPM до найдешевшого
+            # **Оновлена логіка:** динамічне ранжування на основі відносної ефективності
             cheapest_cpm = df_result.loc[cheapest_instrument_index, 'CPM']
-            ideal_shares = cheapest_cpm / df_result.loc[indices_to_distribute_to, 'CPM']
+            # Розраховуємо "ідеальні" частки на основі відносної ефективності
+            ideal_shares = 1 / (1 + (df_result.loc[indices_to_distribute_to, 'CPM'] - cheapest_cpm) / cheapest_cpm)
             ideal_shares_norm = ideal_shares / ideal_shares.sum()
             
             available_budget = (df_result.loc[indices_to_distribute_to, 'MaxShare'] * total_budget - df_result.loc[indices_to_distribute_to, 'Budget'])
@@ -97,7 +98,7 @@ if submitted:
     total_reach_prob = total_reach(df_result["Budget"].values, df_result)
     total_reach_people = total_reach_prob * total_audience
 
-    st.subheader("Гібридний спліт (Динамічний розподіл за CPM)")
+    st.subheader("Гібридний спліт (Динамічний розподіл за відносною ефективністю)")
     st.write(f"Total Reach: **{total_reach_prob*100:.2f}%**")
     
     display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
