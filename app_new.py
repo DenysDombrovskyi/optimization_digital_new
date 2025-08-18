@@ -1,14 +1,15 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from scipy.optimize import minimize
 import io
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import numbers
 
-st.set_page_config(page_title="Digital Split Classifier", layout="wide")
-st.title("Digital Split Classifier – Автоматична класифікація")
+st.set_page_config(page_title="Digital Split Optimizer", layout="wide")
+st.title("Digital Split Optimizer – Єдиний оптимальний спліт")
 
 # ==== Налаштування ====
 num_instruments = st.number_input("Кількість інструментів:", min_value=1, max_value=50, value=20, step=1)
@@ -43,87 +44,64 @@ if submitted:
     
     df["Efficiency"] = 1000 / (df["CPM"] * df["Freq"])
     df["CPR"] = (df["CPM"] / 1000) * (df["Freq"] * total_audience) / total_audience
-    
-    # Сортування за CPM для класифікації
     df = df.sort_values(by="CPM", ascending=True).reset_index(drop=True)
-    
-    # Динамічне визначення груп
-    n_total = len(df)
-    n_gold = max(1, round(n_total * 0.2))  # 20% найкращих, мінімум 1
-    n_silver = max(1, round(n_total * 0.3)) # 30% середніх, мінімум 1
-    n_bronze = n_total - n_gold - n_silver
 
-    df['Tier'] = 'Бронзова група'
-    df.loc[df.index[:n_gold], 'Tier'] = 'Золота група'
-    df.loc[df.index[n_gold:n_gold+n_silver], 'Tier'] = 'Срібна група'
+    # Початкові значення та обмеження для оптимізації
+    x0 = df["MinShare"].values * total_budget + \
+         (df["MaxShare"].values - df["MinShare"].values) * total_budget / len(df)
+    bounds = [(df.loc[i, "MinShare"] * total_budget, df.loc[i, "MaxShare"] * total_budget) for i in range(len(df))]
+    
+    def total_reach(budgets, df_current):
+        impressions = budgets / df_current["CPM"].values * 1000
+        reach_i = np.clip(impressions / total_audience, 0, 1)
+        return 1 - np.prod(1 - reach_i)
 
-    # Розрахунок бюджету
-    df['Budget'] = 0.0
+    # Нова функція оптимізації для максимального ранжування
+    def objective_ranking(budgets):
+        # Максимізуємо суму бюджетів, зважену інверсним CPM
+        # Це еквівалентно мінімізації від'ємного значення
+        return -np.sum(budgets * (1 / df["CPM"].values))
+
+    # Обмеження на загальний бюджет
+    constraints = [{'type': 'eq', 'fun': lambda b: np.sum(b) - total_budget}]
     
-    # 1. Забезпечуємо мінімальний бюджет для всіх
-    df['Budget'] = df['MinShare'] * total_budget
-    remaining_budget = total_budget - df['Budget'].sum()
+    # Виконання оптимізації
+    res = minimize(objective_ranking, x0=x0, bounds=bounds, constraints=constraints, method='SLSQP')
     
-    # 2. Розподіляємо додатковий бюджет на "золоту" групу
-    gold_indices = df[df['Tier'] == 'Золота група'].index
-    if remaining_budget > 0 and len(gold_indices) > 0:
-        gold_max_share_budget = df.loc[gold_indices, 'MaxShare'] * total_budget
-        gold_additional_budget = gold_max_share_budget - df.loc[gold_indices, 'Budget']
-        
-        total_gold_additional = np.sum(gold_additional_budget)
-        
-        if total_gold_additional > 0:
-            to_allocate = min(remaining_budget, total_gold_additional)
-            
-            # Пропорційно розподіляємо між інструментами "золотої" групи
-            df.loc[gold_indices, 'Budget'] += gold_additional_budget / total_gold_additional * to_allocate
-            remaining_budget -= to_allocate
-            
-    # 3. Розподіляємо решту бюджету на "срібну" групу
-    silver_indices = df[df['Tier'] == 'Срібна група'].index
-    if remaining_budget > 0 and len(silver_indices) > 0:
-        silver_max_share_budget = df.loc[silver_indices, 'MaxShare'] * total_budget
-        silver_additional_budget = silver_max_share_budget - df.loc[silver_indices, 'Budget']
-        
-        total_silver_additional = np.sum(silver_additional_budget)
-        
-        if total_silver_additional > 0:
-            to_allocate = min(remaining_budget, total_silver_additional)
-            
-            # Пропорційно розподіляємо між інструментами "срібної" групи
-            df.loc[silver_indices, 'Budget'] += silver_additional_budget / total_silver_additional * to_allocate
-            remaining_budget -= to_allocate
-            
-    # Фінальний розрахунок метрик
-    df["BudgetSharePct"] = df["Budget"] / total_budget
-    df["Impressions"] = df["Budget"] / df["CPM"] * 1000
-    df["Unique Reach (People)"] = df["Impressions"] / df["Freq"]
-    df["ReachPct"] = df["Unique Reach (People)"] / total_audience
-    df["ReachPct"] = df["ReachPct"].clip(upper=1.0)
+    # Обробка результатів
+    df_result = df.copy()
+    df_result["Budget"] = res.x if res.success else 0.0
     
-    total_reach_prob = 1 - np.prod(1 - df["ReachPct"])
+    total_budget_final = df_result["Budget"].sum()
+    df_result["BudgetSharePct"] = df_result["Budget"] / total_budget_final
+    df_result["Impressions"] = df_result["Budget"] / df_result["CPM"] * 1000
+    df_result["Unique Reach (People)"] = df_result["Impressions"] / df_result["Freq"]
+    df_result["ReachPct"] = df_result["Unique Reach (People)"] / total_audience
+    df_result["ReachPct"] = df_result["ReachPct"].clip(upper=1.0)
+    
+    total_reach_prob = total_reach(df_result["Budget"].values, df_result)
     total_reach_people = total_reach_prob * total_audience
 
-    st.subheader("Результат автоматичної класифікації")
+    st.subheader("Оптимальний спліт з максимальним ранжуванням")
     st.write(f"Total Reach: **{total_reach_prob*100:.2f}%**")
     
-    display_cols = ["Instrument", "CPM", "Tier", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
-    st.dataframe(df[display_cols])
+    display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
+    st.dataframe(df_result[display_cols])
 
     # ==== Завантаження результатів у Excel ====
     output = io.BytesIO()
     wb = Workbook()
     ws = wb.active
-    ws.title = "Автоматичний спліт"
+    ws.title = "Оптимальний спліт"
     
-    for r in dataframe_to_rows(df[display_cols], index=False, header=True):
+    for r in dataframe_to_rows(df_result[display_cols], index=False, header=True):
         ws.append(r)
     
     ws.append([])
-    ws.append(["TOTAL", "", "", "", "", df["Budget"].sum(), 1.0, df["Impressions"].sum(), df["Unique Reach (People)"].sum(), f"{total_reach_prob*100:.2f}%"])
+    ws.append(["TOTAL", "", "", "", "", df_result["Budget"].sum(), 1.0, df_result["Impressions"].sum(), df_result["Unique Reach (People)"].sum(), f"{total_reach_prob*100:.2f}%"])
     ws.append(["TOTAL PEOPLE", "", "", "", "", "", "", "", int(total_reach_people), ""])
     
-    for row in ws.iter_rows(min_row=2, max_row=1+len(df), min_col=7, max_col=7):
+    for row in ws.iter_rows(min_row=2, max_row=1+len(df_result), min_col=7, max_col=7):
         for cell in row:
             cell.number_format = '0.00%'
             
@@ -132,8 +110,8 @@ if submitted:
     chart.title = "Бюджет по інструментам (%)"
     chart.y_axis.title = "Budget Share (%)"
     chart.x_axis.title = "Інструменти"
-    data = Reference(ws, min_col=7, min_row=1, max_row=1+len(df))
-    categories = Reference(ws, min_col=1, min_row=2, max_row=1+len(df))
+    data = Reference(ws, min_col=7, min_row=1, max_row=1+len(df_result))
+    categories = Reference(ws, min_col=1, min_row=2, max_row=1+len(df_result))
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(categories)
     ws.add_chart(chart, "L2")
@@ -144,6 +122,6 @@ if submitted:
     st.download_button(
         label="Завантажити результати (Excel)",
         data=output,
-        file_name="Digital_Split_Automatic.xlsx",
+        file_name="Digital_Split_Optimal.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
