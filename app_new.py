@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -63,10 +64,14 @@ if submitted:
 
         res = minimize(objective_maxreach, x0=x0, bounds=bounds, method='SLSQP')
 
-    else:  # Min Cost (при охопленні) – мінімальний бюджет
-        def objective_min_budget(budgets):
-            return np.sum(budgets)
+    else:  # Min Cost (при охопленні) – мінімальний бюджет з урахуванням ефективності
+        lambda_eff_penalty = 0.1
 
+        def objective_min_budget(budgets):
+            total = np.sum(budgets)
+            weights = budgets / total if total > 0 else np.zeros_like(budgets)
+            eff_penalty = np.sum((weights - eff_weights)**2)
+            return total + lambda_eff_penalty * eff_penalty
         def constraint_reach(budgets):
             return total_reach(budgets) - target_reach
 
