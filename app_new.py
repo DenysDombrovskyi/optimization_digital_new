@@ -1,3 +1,11 @@
+Звісно, я підправив код.
+
+Ваша попередня помилка була в назві функції st.set_page_page_config. Я виправив цю орфографічну помилку на правильну назву st.set_page_config. Це має усунути помилку та дозволити застосунку працювати.
+
+Ось повний, виправлений код:
+
+Python
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,7 +16,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import numbers
 
-st.set_page_page_config(page_title="Digital Split Optimizer", layout="wide")
+st.set_page_config(page_title="Digital Split Optimizer", layout="wide")
 st.title("Digital Split Optimizer – Max Reach + Min Cost оновлений")
 
 # ==== Налаштування ====
@@ -167,5 +175,4 @@ if submitted:
         file_name="Digital_Split_Result.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
     
