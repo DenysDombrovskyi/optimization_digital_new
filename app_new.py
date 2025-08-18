@@ -9,16 +9,15 @@ from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import numbers
 
 st.set_page_config(page_title="Digital Split Optimizer", layout="wide")
-st.title("Digital Split Optimizer – Max Reach + Min Cost оновлений")
+st.title("Digital Split Optimizer – 3 варіанти")
 
 # ==== Налаштування ====
 num_instruments = st.number_input("Кількість інструментів:", min_value=1, max_value=50, value=20, step=1)
 total_audience = st.number_input("Загальний розмір потенційної аудиторії:", value=50000, step=1000)
-mode = st.radio("Режим оптимізації:", ["Max Reach (при бюджеті)", "Min Cost (при охопленні)"])
+mode = st.radio("Режим оптимізації:", ["Оцінка спліту (при заданому бюджеті)", "Мінімальна вартість (при заданому охопленні)"])
 
-if mode == "Max Reach (при бюджеті)":
+if mode == "Оцінка спліту (при заданому бюджеті)":
     total_budget = st.number_input("Заданий бюджет ($):", value=100000, step=1000)
-    max_reach_goal = st.radio("Ціль оптимізації:", ["Максимум охоплення", "Пріоритет ефективності", "Збалансований"])
 else:
     total_budget = st.number_input("Максимальний бюджет ($):", value=100000, step=1000)
     target_reach = st.number_input("Цільове охоплення (0-1):", value=0.8, step=0.01)
@@ -57,7 +56,8 @@ if submitted:
     df = df.sort_values(by="CPR", ascending=True).reset_index(drop=True)
     
     # Визначення початкового значення x0 та меж
-    if mode == "Max Reach (при бюджеті)":
+    if mode == "Оцінка спліту (при заданому бюджеті)":
+        
         eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
         x0 = df["MinShare"].values * total_budget + \
              (df["MaxShare"].values - df["MinShare"].values) * total_budget * eff_weights
@@ -79,35 +79,85 @@ if submitted:
         impressions = budgets / df["CPM"].values * 1000
         reach_i = np.clip(impressions / total_audience, 0, 1)
         return 1 - np.prod(1 - reach_i)
+    
+    # --- Нові функції для 3 варіантів ---
+    def objective_cheapest(budgets):
+        # Мінімізуємо середньозважений CPM
+        total_b = np.sum(budgets)
+        if total_b == 0:
+            return float('inf')
+        
+        weighted_cpm = np.sum(budgets * df["CPM"].values) / total_b
+        return weighted_cpm
+    
+    def objective_best_reach(budgets):
+        # Максимізуємо охоплення
+        return -total_reach(budgets)
+        
+    def objective_balanced(budgets):
+        # Компроміс: максимізуємо охоплення і винагороджуємо за ефективність
+        total_b = np.sum(budgets)
+        if total_b == 0:
+            return float('inf')
+            
+        reach = total_reach(budgets)
+        budget_shares = budgets / total_b
+        eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
+        
+        # Нагорода за розподіл, близький до ідеального за ефективністю
+        efficiency_reward = np.sum(budget_shares * eff_weights)
+        return - (reach + 0.5 * efficiency_reward)
 
-    if mode == "Max Reach (при бюджеті)":
-        def objective_maxreach(budgets):
-            total_b = np.sum(budgets)
-            if total_b == 0:
-                return float('inf')
-            
-            reach = total_reach(budgets)
-            
-            # Логіка об'єктивної функції залежить від вибору користувача
-            if max_reach_goal == "Максимум охоплення":
-                return -reach
-            
-            budget_shares = budgets / total_b
-            eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
-            
-            if max_reach_goal == "Пріоритет ефективності":
-                # Винагорода за розподіл на ефективні інструменти
-                # Використовуємо високий фіксований коефіцієнт для сильного пріоритету
-                efficiency_reward = np.sum(budget_shares * eff_weights)
-                return - (reach + 2.0 * efficiency_reward)
-            
-            if max_reach_goal == "Збалансований":
-                # Штраф за відхилення від збалансованого розподілу
-                balance_penalty = np.sum((budget_shares - eff_weights)**2)
-                return - (reach - 0.2 * balance_penalty)
-
-        res = minimize(objective_maxreach, x0=x0, bounds=bounds, constraints=constraints, method='SLSQP')
-
+    if mode == "Оцінка спліту (при заданому бюджеті)":
+        
+        st.subheader("Найдешевший спліт")
+        res_cheapest = minimize(objective_cheapest, x0=x0, bounds=bounds, constraints=constraints, method='SLSQP')
+        df_cheapest = df.copy()
+        if res_cheapest.success:
+            df_cheapest["Budget"] = res_cheapest.x
+        else:
+            df_cheapest["Budget"] = 0.0
+        
+        df_cheapest["BudgetSharePct"] = df_cheapest["Budget"] / df_cheapest["Budget"].sum()
+        df_cheapest["Impressions"] = df_cheapest["Budget"] / df_cheapest["CPM"] * 1000
+        df_cheapest["ReachPct"] = df_cheapest["Impressions"] / total_audience
+        df_cheapest["ReachPct"] = df_cheapest["ReachPct"].clip(upper=1.0)
+        total_reach_prob_cheapest = 1 - np.prod(1 - df_cheapest["ReachPct"])
+        st.write(f"Total Reach: {total_reach_prob_cheapest*100:.2f}%")
+        st.dataframe(df_cheapest)
+        
+        st.subheader("Найкраще охоплення")
+        res_best_reach = minimize(objective_best_reach, x0=x0, bounds=bounds, constraints=constraints, method='SLSQP')
+        df_best_reach = df.copy()
+        if res_best_reach.success:
+            df_best_reach["Budget"] = res_best_reach.x
+        else:
+            df_best_reach["Budget"] = 0.0
+        
+        df_best_reach["BudgetSharePct"] = df_best_reach["Budget"] / df_best_reach["Budget"].sum()
+        df_best_reach["Impressions"] = df_best_reach["Budget"] / df_best_reach["CPM"] * 1000
+        df_best_reach["ReachPct"] = df_best_reach["Impressions"] / total_audience
+        df_best_reach["ReachPct"] = df_best_reach["ReachPct"].clip(upper=1.0)
+        total_reach_prob_best_reach = 1 - np.prod(1 - df_best_reach["ReachPct"])
+        st.write(f"Total Reach: {total_reach_prob_best_reach*100:.2f}%")
+        st.dataframe(df_best_reach)
+        
+        st.subheader("Збалансований спліт")
+        res_balanced = minimize(objective_balanced, x0=x0, bounds=bounds, constraints=constraints, method='SLSQP')
+        df_balanced = df.copy()
+        if res_balanced.success:
+            df_balanced["Budget"] = res_balanced.x
+        else:
+            df_balanced["Budget"] = 0.0
+        
+        df_balanced["BudgetSharePct"] = df_balanced["Budget"] / df_balanced["Budget"].sum()
+        df_balanced["Impressions"] = df_balanced["Budget"] / df_balanced["CPM"] * 1000
+        df_balanced["ReachPct"] = df_balanced["Impressions"] / total_audience
+        df_balanced["ReachPct"] = df_balanced["ReachPct"].clip(upper=1.0)
+        total_reach_prob_balanced = 1 - np.prod(1 - df_balanced["ReachPct"])
+        st.write(f"Total Reach: {total_reach_prob_balanced*100:.2f}%")
+        st.dataframe(df_balanced)
+        
     else:  # Min Cost (при охопленні)
         def objective_min_budget_with_balance(budgets):
             total_b = np.sum(budgets)
@@ -135,25 +185,26 @@ if submitted:
 
         res = minimize(objective_min_budget_with_balance, x0=x0, bounds=bounds, constraints=cons, method='SLSQP', options={'disp': False})
 
-    if res.success:
-        df["Budget"] = res.x
-        df["Impressions"] = df["Budget"] / df["CPM"] * 1000
-    else:
-        st.error("Не вдалося знайти оптимальний спліт. Спробуйте змінити початкові дані (наприклад, цільове охоплення чи частки інструментів).")
-        df["Budget"] = 0.0
-        df["Impressions"] = 0.0
+        if res.success:
+            df["Budget"] = res.x
+            df["Impressions"] = df["Budget"] / df["CPM"] * 1000
+        else:
+            st.error("Не вдалося знайти оптимальний спліт. Спробуйте змінити початкові дані (наприклад, цільове охоплення чи частки інструментів).")
+            df["Budget"] = 0.0
+            df["Impressions"] = 0.0
+        
+        df["BudgetSharePct"] = df["Budget"] / df["Budget"].sum()
+        df["ReachPct"] = df["Impressions"] / total_audience
+        df["ReachPct"] = df["ReachPct"].clip(upper=1.0)
+        total_reach_prob = 1 - np.prod(1 - df["ReachPct"])
+        total_reach_people = total_reach_prob * total_audience
 
-    df["BudgetSharePct"] = df["Budget"] / df["Budget"].sum()
-    df["ReachPct"] = df["Impressions"] / total_audience
-    df["ReachPct"] = df["ReachPct"].clip(upper=1.0)
-    total_reach_prob = 1 - np.prod(1 - df["ReachPct"])
-    total_reach_people = total_reach_prob * total_audience
+        display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Efficiency", "CPR", "Budget", "BudgetSharePct", "Impressions", "ReachPct"]
+        st.subheader(f"Розрахунок спліту (Total Audience={total_audience})")
+        st.dataframe(df[display_cols])
+        st.write(f"Total Reach (ймовірність): {total_reach_prob*100:.2f}%")
+        st.write(f"Total Reach (людей): {int(total_reach_people)}")
 
-    display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Efficiency", "CPR", "Budget", "BudgetSharePct", "Impressions", "ReachPct"]
-    st.subheader(f"Розрахунок спліту (Total Audience={total_audience})")
-    st.dataframe(df[display_cols])
-    st.write(f"Total Reach (ймовірність): {total_reach_prob*100:.2f}%")
-    st.write(f"Total Reach (людей): {int(total_reach_people)}")
 
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button("Завантажити CSV", data=csv, file_name="Digital_Split_Result.csv", mime="text/csv")
@@ -196,4 +247,3 @@ if submitted:
         file_name="Digital_Split_Result.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
