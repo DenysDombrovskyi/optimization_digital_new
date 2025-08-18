@@ -15,8 +15,7 @@ st.title("Digital Split Optimizer – Max Reach + Min Cost оновлений")
 num_instruments = st.number_input("Кількість інструментів:", min_value=1, max_value=50, value=20, step=1)
 total_audience = st.number_input("Загальний розмір потенційної аудиторії:", value=50000, step=1000)
 mode = st.radio("Режим оптимізації:", ["Max Reach (при бюджеті)", "Min Cost (при охопленні)"])
-# Тут ви вказуєте "заданий бюджет" для естимації
-total_budget = st.number_input("Максимальний бюджет ($):", value=100000, step=1000)
+total_budget = st.number_input("Заданий бюджет ($):", value=100000, step=1000)
 if mode == "Min Cost (при охопленні)":
     target_reach = st.number_input("Цільове охоплення (0-1):", value=0.8, step=0.01)
     lambda_balance = st.slider("Коефіцієнт балансу (0 - менш збалансований, 1 - більш збалансований):",
@@ -60,14 +59,15 @@ if submitted:
              (df["MaxShare"].values - df["MinShare"].values) * total_budget * eff_weights
         bounds = [(df.loc[i, "MinShare"] * total_budget, df.loc[i, "MaxShare"] * total_budget) for i in range(len(df))]
         
+        # Обмеження на суму бюджетів, щоб вона дорівнювала total_budget
+        constraints = [{'type': 'eq', 'fun': lambda budgets: np.sum(budgets) - total_budget}]
+        
     else: # Min Cost (при охопленні)
         cpr_weights = (1 / df["CPR"]).values
         cpr_weights_normalized = cpr_weights / cpr_weights.sum()
         
-        # Забезпечуємо, щоб початковий розподіл був нерівномірним
         x0 = cpr_weights_normalized * total_budget
         
-        # Межі залишаються на основі MinShare та MaxShare
         min_budgets = df["MinShare"].values * total_budget
         max_budgets = df["MaxShare"].values * total_budget
         bounds = list(zip(min_budgets, max_budgets))
@@ -84,7 +84,7 @@ if submitted:
             balance_penalty = np.sum((budgets / np.sum(budgets) - eff_weights)**2)
             return - (total_reach(budgets) - lambda_balance_max_reach * balance_penalty)
 
-        res = minimize(objective_maxreach, x0=x0, bounds=bounds, method='SLSQP')
+        res = minimize(objective_maxreach, x0=x0, bounds=bounds, constraints=constraints, method='SLSQP')
 
     else:  # Min Cost (при охопленні)
         def objective_min_budget_with_balance(budgets):
@@ -92,24 +92,21 @@ if submitted:
             if total_b == 0:
                 return float('inf')
             
-            # Розрахунок штрафу за дисбаланс, базуючись на CPR
             budget_shares = budgets / total_b
             cpr_weights_normalized = (1 / df["CPR"]).values / (1 / df["CPR"]).sum()
             balance_penalty = np.sum((budget_shares - cpr_weights_normalized)**2)
             
-            # Вага штрафу тепер не залежить від загального бюджету, що робить її вплив постійним
             return total_b + lambda_balance * balance_penalty * total_budget
         
         def constraint_reach(budgets):
             return total_reach(budgets) - target_reach
             
-        # Нове обмеження: частка кожного інструменту не може перевищувати MaxShare
         cons = [{'type': 'ineq', 'fun': constraint_reach}]
         for i in range(len(df)):
             max_share = df.loc[i, "MaxShare"]
             def constraint_max_share(budgets, i=i, max_share=max_share):
                 if np.sum(budgets) == 0:
-                    return 1.0 # Завжди повертаємо позитивне значення, якщо бюджет нульовий
+                    return 1.0
                 return max_share - (budgets[i] / np.sum(budgets))
             
             cons.append({'type': 'ineq', 'fun': constraint_max_share})
