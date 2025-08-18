@@ -53,50 +53,38 @@ if submitted:
     # Розподіл бюджету за гібридним алгоритмом
     df_result = df.copy()
     
-    # 1. Виділення груп
-    num_top_instruments = min(20, len(df_result))
-    top_20_indices = df_result.iloc[:num_top_instruments].index
-    rest_indices = df_result.iloc[num_top_instruments:].index
-
-    # 2. Розрахунок мінімального бюджету для всіх
+    # 1. Розрахунок мінімального бюджету для всіх
     df_result['Budget'] = df_result['MinShare'] * total_budget
 
-    # **Нова логіка:** Виділяємо максимальний бюджет найдешевшому інструменту
+    # 2. Виділяємо максимальний бюджет найдешевшому інструменту
     cheapest_instrument_index = df_result.index[0]
     df_result.loc[cheapest_instrument_index, 'Budget'] = df_result.loc[cheapest_instrument_index, 'MaxShare'] * total_budget
     
     # 3. Розрахунок доступного бюджету для розподілу між іншими інструментами
     remaining_budget = total_budget - df_result['Budget'].sum()
 
-    # 4. Розподіл додаткового бюджету на групу "top_20" (крім найдешевшого)
-    top_20_other_indices = top_20_indices[1:]
-    
-    if not top_20_other_indices.empty and remaining_budget > 0:
+    # 4. Розподіл залишку на основі CPM для всіх, хто не досяг максимуму
+    if remaining_budget > 0:
         
-        ideal_shares = 1 / df_result.loc[top_20_other_indices, 'CPM']
-        ideal_shares_norm = ideal_shares / ideal_shares.sum()
+        # Визначаємо інструменти, які можуть отримати додатковий бюджет
+        indices_to_distribute_to = df_result.index[df_result['Budget'] < df_result['MaxShare'] * total_budget]
         
-        top_20_other_max_budget = df_result.loc[top_20_other_indices, 'MaxShare'] * total_budget
-        top_20_other_current_budget = df_result.loc[top_20_other_indices, 'Budget']
-        top_20_other_available_budget = top_20_other_max_budget - top_20_other_current_budget
-        
-        to_allocate_to_top20 = min(remaining_budget, top_20_other_available_budget.sum())
-        
-        if to_allocate_to_top20 > 0:
-            top_20_budget_share = ideal_shares_norm * to_allocate_to_top20
+        if len(indices_to_distribute_to) > 0:
             
-            df_result.loc[top_20_other_indices, 'Budget'] += np.minimum(top_20_budget_share.values, top_20_other_available_budget.values)
+            # **Оновлена логіка:** крок залежить від CPM для всіх інструментів
+            ideal_shares = 1 / df_result.loc[indices_to_distribute_to, 'CPM']
+            ideal_shares_norm = ideal_shares / ideal_shares.sum()
             
-            remaining_budget = total_budget - df_result['Budget'].sum()
+            available_budget = (df_result.loc[indices_to_distribute_to, 'MaxShare'] * total_budget - df_result.loc[indices_to_distribute_to, 'Budget'])
+
+            to_allocate = min(remaining_budget, available_budget.sum())
             
-    # 5. Рівномірний розподіл залишку на групу "rest"
-    if not rest_indices.empty and remaining_budget > 0:
-        rest_available_indices = rest_indices[df_result.loc[rest_indices, 'Budget'] < df_result.loc[rest_indices, 'MaxShare'] * total_budget]
-        
-        if len(rest_available_indices) > 0:
-            uniform_share = remaining_budget / len(rest_available_indices)
-            
-            df_result.loc[rest_available_indices, 'Budget'] += np.minimum(uniform_share, df_result.loc[rest_available_indices, 'MaxShare'] * total_budget - df_result.loc[rest_available_indices, 'Budget'])
+            if to_allocate > 0:
+                budget_share = ideal_shares_norm * to_allocate
+                
+                df_result.loc[indices_to_distribute_to, 'Budget'] += np.minimum(budget_share.values, available_budget.values)
+                
+                remaining_budget = total_budget - df_result['Budget'].sum()
 
     # Фінальний розрахунок метрик
     df_result["BudgetSharePct"] = df_result["Budget"] / total_budget
@@ -108,7 +96,7 @@ if submitted:
     total_reach_prob = total_reach(df_result["Budget"].values, df_result)
     total_reach_people = total_reach_prob * total_audience
 
-    st.subheader("Гібридний спліт (Топ-20 з ранжуванням + рівномірний)")
+    st.subheader("Гібридний спліт (Динамічний розподіл за CPM)")
     st.write(f"Total Reach: **{total_reach_prob*100:.2f}%**")
     
     display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
