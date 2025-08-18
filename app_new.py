@@ -68,61 +68,52 @@ if submitted:
         
         df_result = df.copy()
         
-        # Визначаємо мінімальний бюджет на основі MinShare
-        total_min_share = df_result['MinShare'].sum()
-        if total_min_share > 1.0:
-            st.error("Сума MinShare не може перевищувати 100%. Будь ласка, перевірте ваші дані.")
-            st.stop()
+        # Обчислюємо початковий бюджет, який потрібен для MinShare
+        # Використовуємо ітераційний підхід, щоб знайти правильний загальний бюджет
+        # який задовольнить MinShare для всіх інструментів
         
-        # Обчислюємо приблизний повний бюджет для MinShare
-        estimated_budget_for_mins = 100000  # Базове значення для розрахунку
+        final_total_budget = 0
         
-        # Фаза 1: Заповнюємо MinShare. Це наш "обов'язковий" бюджет.
-        df_result['Budget'] = df_result['MinShare'] * estimated_budget_for_mins
+        # Перша ітерація: пробуємо з базовим бюджетом
+        test_budget = 100000
+        df_result['Budget'] = df_result['MinShare'] * test_budget
         
-        # Фаза 2: Додаємо бюджет жадібним алгоритмом до досягнення цілі
-        
-        # Сортуємо за CPR для ефективного розподілу залишку
-        df_result = df_result.sort_values(by="CPR", ascending=True).reset_index(drop=True)
-        
+        # Обчислюємо скільки бюджету потрібно для досягнення цілі
+        current_reach_prob = total_reach(df_result['Budget'], df_result)
+        current_reach_people = current_reach_prob * total_audience
         reach_target_people = total_audience * (reach_target_pct / 100)
-        current_reach_people = 0
-        current_budget = 0
         
-        # Розраховуємо охоплення та бюджет, якщо MinShare буде реалізовано
-        initial_impressions = df_result['MinShare'] * estimated_budget_for_mins / df_result['CPM'] * 1000
-        initial_reach = initial_impressions / df_result['Freq']
-        current_reach_people = np.sum(initial_reach.clip(upper=total_audience))
-        current_budget = df_result['Budget'].sum()
-
         if current_reach_people < reach_target_people:
-            # Розподіляємо залишок бюджету
-            indices_to_distribute_to = df_result.index
-            for index in indices_to_distribute_to:
-                row = df_result.loc[index]
-                if current_reach_people >= reach_target_people:
+            # Якщо початкового бюджету недостатньо, додаємо його
+            df_result_sorted = df_result.sort_values(by="CPR", ascending=True).reset_index(drop=True)
+            
+            remaining_budget_needed = reach_target_people - current_reach_people
+            
+            for index, row in df_result_sorted.iterrows():
+                if remaining_budget_needed <= 0:
                     break
                 
-                # Потенційний бюджет до MaxShare
-                potential_max_budget = row['MaxShare'] * estimated_budget_for_mins
-                budget_to_add = potential_max_budget - row['Budget']
+                # Потенціал інструмента до MaxShare
+                max_budget_limit = row['MaxShare'] * test_budget
+                budget_to_add = max_budget_limit - df_result_sorted.loc[index, 'Budget']
                 
-                # Додаємо бюджет, поки не досягнемо мети або ліміту
-                if budget_to_add > 0:
-                    budget_needed_for_target = (reach_target_people - current_reach_people) * row['CPR']
-                    budget_to_add_actual = min(budget_to_add, budget_needed_for_target)
+                if budget_to_add > 0 and row['CPR'] != np.inf:
+                    # Розрахунок бюджету, потрібного для досягнення цільового охоплення
+                    budget_for_reach = remaining_budget_needed * row['CPR']
                     
-                    df_result.loc[index, 'Budget'] += budget_to_add_actual
-                    current_budget += budget_to_add_actual
-                    current_reach_people += (budget_to_add_actual / row['CPM'] * 1000) / row['Freq']
-        
-        # Фінальне масштабування
-        final_total_budget = df_result['Budget'].sum()
-        if total_reach(df_result['Budget'], df_result) * total_audience < reach_target_people:
-            scaling_factor = reach_target_people / (total_reach(df_result['Budget'], df_result) * total_audience)
+                    actual_budget_to_add = min(budget_to_add, budget_for_reach)
+                    
+                    df_result_sorted.loc[index, 'Budget'] += actual_budget_to_add
+                    remaining_reach_needed -= (actual_budget_to_add / row['CPM'] * 1000) / row['Freq']
+            
+            df_result = df_result_sorted.copy()
+            final_total_budget = df_result['Budget'].sum()
+        else:
+            # Якщо початкового бюджету забагато, масштабуємо його
+            scaling_factor = reach_target_people / current_reach_people
             df_result['Budget'] *= scaling_factor
             final_total_budget = df_result['Budget'].sum()
-        
+
         # Фінальна перевірка та коригування бюджету
         df_result["BudgetSharePct"] = df_result["Budget"] / final_total_budget if final_total_budget > 0 else 0
         df_result["Impressions"] = df_result["Budget"] / df_result["CPM"] * 1000
