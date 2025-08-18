@@ -9,7 +9,7 @@ from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import numbers
 
 st.set_page_config(page_title="Digital Split Optimizer", layout="wide")
-st.title("Digital Split Optimizer – 3 варіанти")
+st.title("Digital Split Optimizer – 4 варіанти")
 
 # ==== Налаштування ====
 num_instruments = st.number_input("Кількість інструментів:", min_value=1, max_value=50, value=20, step=1)
@@ -77,15 +77,13 @@ if submitted:
     display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Efficiency", "CPR", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
     
     # ==== Варіант 1: Найдешевший спліт (залежність від CPM/CPR) ====
-    st.subheader("1. Найдешевший спліт (частки залежать від ефективності)")
+    st.subheader("1. Найдешевший спліт (оптимізований)")
     
     def objective_cheapest(budgets):
         total_b = np.sum(budgets)
         if total_b == 0:
             return float('inf')
         
-        # Мінімізуємо середньозважений CPM/CPR
-        # Це прямо змушує оптимізатор віддавати перевагу найдешевшим інструментам
         weighted_cpm = np.sum(budgets * df["CPM"].values) / total_b
         return weighted_cpm
     
@@ -151,7 +149,6 @@ if submitted:
         
     df_ideal["BudgetSharePct"] = df_ideal["Budget"] / df_ideal["Budget"].sum()
     df_ideal["Impressions"] = df_ideal["Budget"] / df_ideal["CPM"] * 1000
-    df_ideal["ReachPct"] = df_ideal["Impressions"] / total_audience
     df_ideal["ReachPct"] = df_ideal["ReachPct"].clip(upper=1.0)
     df_ideal["Unique Reach (People)"] = df_ideal["Impressions"] / df_ideal["Freq"]
     total_reach_prob_ideal = total_reach(df_ideal["Budget"].values, df_ideal)
@@ -159,7 +156,52 @@ if submitted:
     st.write(f"**Бюджет для досягнення ідеального охоплення:** **{df_ideal['Budget'].sum():.2f}$**")
     st.dataframe(df_ideal[display_cols])
     results['Максимальне охоплення'] = df_ideal
-
+    
+    # ==== Варіант 4: Пропорційний (за CPM) спліт ====
+    st.subheader("4. Пропорційний (за CPM) спліт")
+    
+    df_proportional = df.copy()
+    df_proportional['CPM_Inverse'] = 1 / df_proportional['CPM']
+    
+    total_cpm_inverse = df_proportional['CPM_Inverse'].sum()
+    df_proportional['TargetShare'] = df_proportional['CPM_Inverse'] / total_cpm_inverse
+    
+    df_proportional['Budget'] = total_budget * df_proportional['TargetShare']
+    
+    # Коригування бюджету за обмеженнями
+    
+    # Спочатку обробляємо MinShare
+    min_share_exceed = df_proportional[df_proportional['BudgetSharePct'] < df_proportional['MinShare']]
+    if not min_share_exceed.empty:
+        excess_budget = np.sum(df_proportional['MinShare'] * total_budget) - np.sum(min_share_exceed['Budget'])
+        df_proportional.loc[min_share_exceed.index, 'Budget'] = min_share_exceed['MinShare'] * total_budget
+        
+        remaining_budget_proportional_instruments = df_proportional[df_proportional['BudgetSharePct'] >= df_proportional['MinShare']]
+        remaining_budget = total_budget - np.sum(min_share_exceed['Budget'])
+        
+        remaining_budget_shares = remaining_budget_proportional_instruments['TargetShare'] / np.sum(remaining_budget_proportional_instruments['TargetShare'])
+        df_proportional.loc[remaining_budget_proportional_instruments.index, 'Budget'] = remaining_budget_shares * remaining_budget
+    
+    # Потім обробляємо MaxShare
+    max_share_exceed = df_proportional[df_proportional['BudgetSharePct'] > df_proportional['MaxShare']]
+    if not max_share_exceed.empty:
+        excess_budget = np.sum(max_share_exceed['Budget']) - np.sum(max_share_exceed['MaxShare'] * total_budget)
+        df_proportional.loc[max_share_exceed.index, 'Budget'] = max_share_exceed['MaxShare'] * total_budget
+        
+        remaining_budget_proportional_instruments = df_proportional[df_proportional['BudgetSharePct'] < df_proportional['MaxShare']]
+        remaining_budget_shares = remaining_budget_proportional_instruments['TargetShare'] / np.sum(remaining_budget_proportional_instruments['TargetShare'])
+        df_proportional.loc[remaining_budget_proportional_instruments.index, 'Budget'] += remaining_budget_shares * excess_budget
+    
+    df_proportional["BudgetSharePct"] = df_proportional["Budget"] / df_proportional["Budget"].sum()
+    df_proportional["Impressions"] = df_proportional["Budget"] / df_proportional["CPM"] * 1000
+    df_proportional["Unique Reach (People)"] = df_proportional["Impressions"] / df_proportional["Freq"]
+    df_proportional["ReachPct"] = df_proportional["Unique Reach (People)"] / total_audience
+    total_reach_prob_prop = total_reach(df_proportional["Budget"].values, df_proportional)
+    
+    st.write(f"Total Reach: **{total_reach_prob_prop*100:.2f}%**")
+    st.dataframe(df_proportional[display_cols])
+    results['Пропорційний спліт'] = df_proportional
+    
     # ==== Завантаження результатів у Excel ====
     output = io.BytesIO()
     wb = Workbook()
@@ -176,7 +218,7 @@ if submitted:
         
         ws.append([])
         ws.append(["TOTAL", "", "", "", "", "", "", total_budget_sum, 1.0, total_impressions_sum, np.sum(result_df["Unique Reach (People)"]), f"{total_reach_prob*100:.2f}%"])
-        ws.append(["TOTAL PEOPLE", "", "", "", "", "", "", "", "", "", int(total_reach_people)])
+        ws.append(["TOTAL PEOPLE", "", "", "", "", "", "", "", "", int(total_reach_people), ""])
         
         for row in ws.iter_rows(min_row=2, max_row=1+len(result_df), min_col=9, max_col=9):
             for cell in row:
@@ -202,7 +244,6 @@ if submitted:
     st.download_button(
         label="Завантажити результати (Excel)",
         data=output,
-        file_name="Digital_Split_3_Options.xlsx",
+        file_name="Digital_Split_4_Options.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
