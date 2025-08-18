@@ -73,10 +73,17 @@ if submitted:
         df_result['Budget'] = 0.0
         
         for index, row in df_result.iterrows():
-            unique_reach_instrument = row["Impressions"] / row["Freq"] if row["Freq"] > 0 else 0
+            # Розраховуємо потенційне охоплення та бюджет для кожного інструмента
+            if row["Freq"] > 0:
+                potential_impressions = (total_audience * 1000) / row["CPM"]
+                potential_reach = potential_impressions / row["Freq"]
+                potential_budget = potential_impressions * row["CPM"] / 1000
+            else:
+                potential_reach = 0
+                potential_budget = 0
             
             # Якщо інструмент може забезпечити все, що залишилось
-            if current_reach_people + unique_reach_instrument >= reach_target_people:
+            if current_reach_people + potential_reach >= reach_target_people:
                 needed_reach = reach_target_people - current_reach_people
                 impressions_needed = needed_reach * row["Freq"]
                 budget_needed = impressions_needed * row["CPM"] / 1000
@@ -87,11 +94,10 @@ if submitted:
                 break
             else:
                 # Використовуємо інструмент повністю
-                budget_instrument = row['Budget']
-                df_result.loc[index, 'Budget'] = budget_instrument
-                current_budget += budget_instrument
-                current_reach_people += unique_reach_instrument
-        
+                df_result.loc[index, 'Budget'] = potential_budget
+                current_budget += potential_budget
+                current_reach_people += potential_reach
+
         # Перераховуємо всі частки на основі отриманого мінімального бюджету
         df_result["BudgetSharePct"] = df_result["Budget"] / current_budget if current_budget > 0 else 0
         df_result["Impressions"] = df_result["Budget"] / df_result["CPM"] * 1000
@@ -163,26 +169,32 @@ if submitted:
     # Визначаємо, які колонки виводити в Excel
     if optimization_goal == 'Мінімізація бюджету':
         excel_cols = ["Instrument", "CPM", "CPR", "Freq", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
+        df_to_save = df_result[excel_cols].copy()
+        
+        df_to_save.loc[len(df_to_save)] = ["TOTAL", "", "", "", df_result["Budget"].sum(), 1.0, df_result["Impressions"].sum(), df_result["Unique Reach (People)"].sum(), f"{total_reach_prob*100:.2f}%"]
+        
+        for r in dataframe_to_rows(df_to_save, index=False, header=True):
+            ws.append(r)
+
     else:
         excel_cols = ["Instrument", "CPM", "CPR", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
+        df_to_save = df_result[excel_cols].copy()
         
-    for r in dataframe_to_rows(df_result[excel_cols], index=False, header=True):
-        ws.append(r)
+        df_to_save.loc[len(df_to_save)] = ["TOTAL", "", "", "", "", "", df_result["Budget"].sum(), 1.0, df_result["Impressions"].sum(), df_result["Unique Reach (People)"].sum(), f"{total_reach_prob*100:.2f}%"]
+        
+        for r in dataframe_to_rows(df_to_save, index=False, header=True):
+            ws.append(r)
     
-    ws.append([])
-    ws.append(["TOTAL", "", "", "", "", df_result["Budget"].sum(), 1.0, df_result["Impressions"].sum(), df_result["Unique Reach (People)"].sum(), f"{total_reach_prob*100:.2f}%"])
-    ws.append(["TOTAL PEOPLE", "", "", "", "", "", "", "", int(total_reach_people), ""])
-    
-    for row in ws.iter_rows(min_row=2, max_row=1+len(df_result), min_col=8, max_col=8):
+    for row in ws.iter_rows(min_row=2, max_row=1+len(df_result), min_col=excel_cols.index("BudgetSharePct") + 1, max_col=excel_cols.index("BudgetSharePct") + 1):
         for cell in row:
             cell.number_format = '0.00%'
-            
+
     chart = BarChart()
     chart.type = "col"
     chart.title = "Бюджет по інструментам (%)"
     chart.y_axis.title = "Budget Share (%)"
     chart.x_axis.title = "Інструменти"
-    data = Reference(ws, min_col=8, min_row=1, max_row=1+len(df_result))
+    data = Reference(ws, min_col=excel_cols.index("BudgetSharePct") + 1, min_row=1, max_row=1+len(df_result))
     categories = Reference(ws, min_col=1, min_row=2, max_row=1+len(df_result))
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(categories)
