@@ -63,96 +63,31 @@ if submitted:
         reach_i = np.clip(impressions / total_audience, 0, 1)
         return 1 - np.prod(1 - reach_i)
 
-    # ==== Мінімізація бюджету (оновлена логіка) ====
-    if optimization_goal == 'Мінімізація бюджету':
-        
-        df_result = df.copy()
-        
-        # Обчислюємо початковий бюджет, який потрібен для MinShare
-        # Використовуємо ітераційний підхід, щоб знайти правильний загальний бюджет
-        # який задовольнить MinShare для всіх інструментів
-        
-        final_total_budget = 0
-        
-        # Перша ітерація: пробуємо з базовим бюджетом
-        test_budget = 100000
-        df_result['Budget'] = df_result['MinShare'] * test_budget
-        
-        # Обчислюємо скільки бюджету потрібно для досягнення цілі
-        current_reach_prob = total_reach(df_result['Budget'], df_result)
-        current_reach_people = current_reach_prob * total_audience
-        reach_target_people = total_audience * (reach_target_pct / 100)
-        
-        if current_reach_people < reach_target_people:
-            # Якщо початкового бюджету недостатньо, додаємо його
-            df_result_sorted = df_result.sort_values(by="CPR", ascending=True).reset_index(drop=True)
-            
-            remaining_budget_needed = reach_target_people - current_reach_people
-            
-            for index, row in df_result_sorted.iterrows():
-                if remaining_budget_needed <= 0:
-                    break
-                
-                # Потенціал інструмента до MaxShare
-                max_budget_limit = row['MaxShare'] * test_budget
-                budget_to_add = max_budget_limit - df_result_sorted.loc[index, 'Budget']
-                
-                if budget_to_add > 0 and row['CPR'] != np.inf:
-                    # Розрахунок бюджету, потрібного для досягнення цільового охоплення
-                    budget_for_reach = remaining_budget_needed * row['CPR']
-                    
-                    actual_budget_to_add = min(budget_to_add, budget_for_reach)
-                    
-                    df_result_sorted.loc[index, 'Budget'] += actual_budget_to_add
-                    remaining_reach_needed -= (actual_budget_to_add / row['CPM'] * 1000) / row['Freq']
-            
-            df_result = df_result_sorted.copy()
-            final_total_budget = df_result['Budget'].sum()
-        else:
-            # Якщо початкового бюджету забагато, масштабуємо його
-            scaling_factor = reach_target_people / current_reach_people
-            df_result['Budget'] *= scaling_factor
-            final_total_budget = df_result['Budget'].sum()
+    # ==== Загальний алгоритм розподілу, який використовується в обох опціях ====
+    def distribute_budget(df_input, budget):
+        df_result = df_input.sort_values(by="CPR", ascending=True).reset_index(drop=True)
 
-        # Фінальна перевірка та коригування бюджету
-        df_result["BudgetSharePct"] = df_result["Budget"] / final_total_budget if final_total_budget > 0 else 0
-        df_result["Impressions"] = df_result["Budget"] / df_result["CPM"] * 1000
-        df_result["Unique Reach (People)"] = df_result["Impressions"] / df_result["Freq"]
-        df_result["ReachPct"] = df_result["Unique Reach (People)"] / total_audience
-        df_result["ReachPct"] = df_result["ReachPct"].clip(upper=1.0)
-
-        total_reach_prob = total_reach(df_result["Budget"].values, df_result)
-        
-        st.subheader(f"Результат: Мінімізація бюджету")
-        st.write(f"Мінімальний бюджет для охоплення **{total_reach_prob*100:.2f}%** аудиторії: **{final_total_budget:,.2f} $**")
-        st.dataframe(df_result)
-        
-    # ==== Максимізація охоплення (існуючий варіант) ====
-    elif optimization_goal == 'Максимізація охоплення':
-        df = df.sort_values(by="CPR", ascending=True).reset_index(drop=True)
-        df_result = df.copy()
-        
         # 1. Розрахунок мінімального бюджету для всіх
-        df_result['Budget'] = df_result['MinShare'] * total_budget
+        df_result['Budget'] = df_result['MinShare'] * budget
 
         # 2. Виділяємо максимальний бюджет найдешевшому інструменту (за CPR)
         cheapest_instrument_index = df_result.index[0]
-        df_result.loc[cheapest_instrument_index, 'Budget'] = df_result.loc[cheapest_instrument_index, 'MaxShare'] * total_budget
+        df_result.loc[cheapest_instrument_index, 'Budget'] = df_result.loc[cheapest_instrument_index, 'MaxShare'] * budget
         
         # 3. Розрахунок доступного бюджету для розподілу між іншими інструментами
-        remaining_budget = total_budget - df_result['Budget'].sum()
+        remaining_budget = budget - df_result['Budget'].sum()
 
         # 4. Розподіл залишку на основі CPR для всіх, хто не досяг максимуму
         if remaining_budget > 0:
             indices_to_distribute_to = df_result.index[1:]
             
-            indices_to_distribute_to = indices_to_distribute_to[df_result.loc[indices_to_distribute_to, 'Budget'] < df_result.loc[indices_to_distribute_to, 'MaxShare'] * total_budget]
+            indices_to_distribute_to = indices_to_distribute_to[df_result.loc[indices_to_distribute_to, 'Budget'] < df_result.loc[indices_to_distribute_to, 'MaxShare'] * budget]
             
             if len(indices_to_distribute_to) > 0:
                 ideal_shares = 1 / df_result.loc[indices_to_distribute_to, 'CPR']
                 ideal_shares_norm = ideal_shares / ideal_shares.sum()
                 
-                available_budget = (df_result.loc[indices_to_distribute_to, 'MaxShare'] * total_budget - df_result.loc[indices_to_distribute_to, 'Budget'])
+                available_budget = (df_result.loc[indices_to_distribute_to, 'MaxShare'] * budget - df_result.loc[indices_to_distribute_to, 'Budget'])
 
                 to_allocate = min(remaining_budget, available_budget.sum())
                 
@@ -162,7 +97,7 @@ if submitted:
                     df_result.loc[indices_to_distribute_to, 'Budget'] += np.minimum(budget_share.values, available_budget.values)
                     
         # 5. Фінальне перезважування для отримання 100%
-        df_result["BudgetSharePct"] = df_result["Budget"] / df_result["Budget"].sum()
+        df_result["BudgetSharePct"] = df_result["Budget"] / df_result["Budget"].sum() if df_result["Budget"].sum() > 0 else 0
 
         # Фінальний розрахунок інших метрик
         df_result["Impressions"] = df_result["Budget"] / df_result["CPM"] * 1000
@@ -170,9 +105,46 @@ if submitted:
         df_result["ReachPct"] = df_result["Unique Reach (People)"] / total_audience
         df_result["ReachPct"] = df_result["ReachPct"].clip(upper=1.0)
         
+        return df_result
+    
+    # ==== Мінімізація бюджету ====
+    if optimization_goal == 'Мінімізація бюджету':
+        reach_target_people = total_audience * (reach_target_pct / 100)
+        
+        # Розраховуємо рекомендований бюджет для досягнення цілі
+        # Використовуємо ітерацію для пошуку мінімального бюджету
+        low_budget = 0
+        high_budget = 1000000 # Велика початкова оцінка
+        recommended_budget = 0
+        
+        for _ in range(100): # Використовуємо 100 ітерацій для точності
+            mid_budget = (low_budget + high_budget) / 2
+            if mid_budget == 0:
+                mid_budget = 1
+            
+            temp_df = distribute_budget(df, mid_budget)
+            current_reach = total_reach(temp_df['Budget'].values, temp_df) * total_audience
+            
+            if current_reach < reach_target_people:
+                low_budget = mid_budget
+            else:
+                high_budget = mid_budget
+                recommended_budget = mid_budget
+        
+        df_result = distribute_budget(df, recommended_budget)
+        final_total_budget = df_result['Budget'].sum()
         total_reach_prob = total_reach(df_result["Budget"].values, df_result)
-        total_reach_people = total_reach_prob * total_audience
-
+        
+        st.subheader(f"Результат: Мінімізація бюджету")
+        st.write(f"Мінімальний бюджет для охоплення **{total_reach_prob*100:.2f}%** аудиторії: **{final_total_budget:,.2f} $**")
+        st.dataframe(df_result)
+        
+    # ==== Максимізація охоплення ====
+    elif optimization_goal == 'Максимізація охоплення':
+        df_result = distribute_budget(df, total_budget)
+        
+        total_reach_prob = total_reach(df_result["Budget"].values, df_result)
+        
         st.subheader("Гібридний спліт (Максимізація охоплення)")
         st.write(f"Total Reach: **{total_reach_prob*100:.2f}%**")
         
@@ -185,7 +157,6 @@ if submitted:
     ws = wb.active
     ws.title = "Гібридний спліт"
     
-    # Визначаємо, які колонки виводити в Excel
     excel_cols = ["Instrument", "CPM", "CPR", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
 
     df_to_save = df_result[excel_cols].copy()
