@@ -8,7 +8,7 @@ from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import numbers
 
 st.set_page_config(page_title="Digital Split Classifier", layout="wide")
-st.title("Digital Split Classifier – Класифікація за CPM")
+st.title("Digital Split Classifier – Автоматична класифікація")
 
 # ==== Налаштування ====
 num_instruments = st.number_input("Кількість інструментів:", min_value=1, max_value=50, value=20, step=1)
@@ -47,52 +47,52 @@ if submitted:
     # Сортування за CPM для класифікації
     df = df.sort_values(by="CPM", ascending=True).reset_index(drop=True)
     
-    # Класифікація інструментів
-    df['Tier'] = 'Інші'
-    if len(df) >= 3:
-        df.loc[df.index[:3], 'Tier'] = 'Найвищий пріоритет'
-    if len(df) >= 6:
-        df.loc[df.index[3:6], 'Tier'] = 'Середній пріоритет'
+    # Динамічне визначення груп
+    n_total = len(df)
+    n_gold = max(1, round(n_total * 0.2))  # 20% найкращих, мінімум 1
+    n_silver = max(1, round(n_total * 0.3)) # 30% середніх, мінімум 1
+    n_bronze = n_total - n_gold - n_silver
+
+    df['Tier'] = 'Бронзова група'
+    df.loc[df.index[:n_gold], 'Tier'] = 'Золота група'
+    df.loc[df.index[n_gold:n_gold+n_silver], 'Tier'] = 'Срібна група'
 
     # Розрахунок бюджету
     df['Budget'] = 0.0
     
-    # 1. Розподіляємо мінімальний бюджет на всі інструменти
+    # 1. Забезпечуємо мінімальний бюджет для всіх
     df['Budget'] = df['MinShare'] * total_budget
     remaining_budget = total_budget - df['Budget'].sum()
     
-    # 2. Розподіляємо решту бюджету на пріоритетні групи
-    if remaining_budget > 0:
-        tier1_indices = df[df['Tier'] == 'Найвищий пріоритет'].index
-        tier2_indices = df[df['Tier'] == 'Середній пріоритет'].index
+    # 2. Розподіляємо додатковий бюджет на "золоту" групу
+    gold_indices = df[df['Tier'] == 'Золота група'].index
+    if remaining_budget > 0 and len(gold_indices) > 0:
+        gold_max_share_budget = df.loc[gold_indices, 'MaxShare'] * total_budget
+        gold_additional_budget = gold_max_share_budget - df.loc[gold_indices, 'Budget']
         
-        # Визначаємо, скільки ще можна виділити бюджету на кожну групу
-        tier1_allocatable_budget = np.sum(df.loc[tier1_indices, 'MaxShare'] * total_budget - df.loc[tier1_indices, 'Budget'])
-        tier2_allocatable_budget = np.sum(df.loc[tier2_indices, 'MaxShare'] * total_budget - df.loc[tier2_indices, 'Budget'])
+        total_gold_additional = np.sum(gold_additional_budget)
         
-        # Надаємо перевагу найвищому пріоритету
-        if tier1_allocatable_budget > 0:
-            tier1_to_allocate = min(remaining_budget, tier1_allocatable_budget)
+        if total_gold_additional > 0:
+            to_allocate = min(remaining_budget, total_gold_additional)
             
-            # Пропорційно розподіляємо між інструментами Tier 1
-            if tier1_to_allocate > 0:
-                tier1_budget_shares = (df.loc[tier1_indices, 'MaxShare'] - df.loc[tier1_indices, 'MinShare'])
-                tier1_budget_shares_norm = tier1_budget_shares / tier1_budget_shares.sum()
-                df.loc[tier1_indices, 'Budget'] += tier1_budget_shares_norm * tier1_to_allocate
+            # Пропорційно розподіляємо між інструментами "золотої" групи
+            df.loc[gold_indices, 'Budget'] += gold_additional_budget / total_gold_additional * to_allocate
+            remaining_budget -= to_allocate
             
-            remaining_budget -= tier1_to_allocate
+    # 3. Розподіляємо решту бюджету на "срібну" групу
+    silver_indices = df[df['Tier'] == 'Срібна група'].index
+    if remaining_budget > 0 and len(silver_indices) > 0:
+        silver_max_share_budget = df.loc[silver_indices, 'MaxShare'] * total_budget
+        silver_additional_budget = silver_max_share_budget - df.loc[silver_indices, 'Budget']
         
-        # Розподіляємо решту на середній пріоритет
-        if remaining_budget > 0 and tier2_allocatable_budget > 0:
-            tier2_to_allocate = min(remaining_budget, tier2_allocatable_budget)
+        total_silver_additional = np.sum(silver_additional_budget)
+        
+        if total_silver_additional > 0:
+            to_allocate = min(remaining_budget, total_silver_additional)
             
-            # Пропорційно розподіляємо між інструментами Tier 2
-            if tier2_to_allocate > 0:
-                tier2_budget_shares = (df.loc[tier2_indices, 'MaxShare'] - df.loc[tier2_indices, 'MinShare'])
-                tier2_budget_shares_norm = tier2_budget_shares / tier2_budget_shares.sum()
-                df.loc[tier2_indices, 'Budget'] += tier2_budget_shares_norm * tier2_to_allocate
-                
-            remaining_budget -= tier2_to_allocate
+            # Пропорційно розподіляємо між інструментами "срібної" групи
+            df.loc[silver_indices, 'Budget'] += silver_additional_budget / total_silver_additional * to_allocate
+            remaining_budget -= to_allocate
             
     # Фінальний розрахунок метрик
     df["BudgetSharePct"] = df["Budget"] / total_budget
@@ -104,7 +104,7 @@ if submitted:
     total_reach_prob = 1 - np.prod(1 - df["ReachPct"])
     total_reach_people = total_reach_prob * total_audience
 
-    st.subheader("Результат класифікованого розподілу")
+    st.subheader("Результат автоматичної класифікації")
     st.write(f"Total Reach: **{total_reach_prob*100:.2f}%**")
     
     display_cols = ["Instrument", "CPM", "Tier", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
@@ -114,7 +114,7 @@ if submitted:
     output = io.BytesIO()
     wb = Workbook()
     ws = wb.active
-    ws.title = "Класифікований спліт"
+    ws.title = "Автоматичний спліт"
     
     for r in dataframe_to_rows(df[display_cols], index=False, header=True):
         ws.append(r)
@@ -144,6 +144,6 @@ if submitted:
     st.download_button(
         label="Завантажити результати (Excel)",
         data=output,
-        file_name="Digital_Split_Classified.xlsx",
+        file_name="Digital_Split_Automatic.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
