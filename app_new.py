@@ -59,9 +59,31 @@ if submitted:
     
     # Визначення початкового значення x0 та меж
     if mode == "Max Reach (при бюджеті)":
-        eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
-        x0 = df["MinShare"].values * total_budget + \
-             (df["MaxShare"].values - df["MinShare"].values) * total_budget * eff_weights
+        
+        # --- Нова логіка для Max Reach ---
+        budgets_x0 = np.zeros(len(df))
+        remaining_budget = total_budget
+        
+        # Заповнюємо найефективніші інструменти до їх MaxShare
+        sorted_df_eff = df.sort_values(by="Efficiency", ascending=False).copy().reset_index()
+        
+        for i in range(len(sorted_df_eff)):
+            instrument_idx = sorted_df_eff.loc[i, 'index']
+            max_budget_i = sorted_df_eff.loc[i, 'MaxShare'] * total_budget
+            
+            # Якщо є ще бюджет і він не менший за мінімальний
+            budget_to_allocate = min(max_budget_i, remaining_budget)
+            if budget_to_allocate > 0 and budget_to_allocate >= (sorted_df_eff.loc[i, 'MinShare'] * total_budget):
+                budgets_x0[i] = budget_to_allocate
+                remaining_budget -= budget_to_allocate
+                if remaining_budget <= 0:
+                    break
+        
+        # Якщо залишився бюджет, розподіляємо його рівномірно
+        if remaining_budget > 0:
+            budgets_x0 += remaining_budget / len(df)
+            
+        x0 = budgets_x0
         bounds = [(df.loc[i, "MinShare"] * total_budget, df.loc[i, "MaxShare"] * total_budget) for i in range(len(df))]
         
         constraints = [{'type': 'eq', 'fun': lambda budgets: np.sum(budgets) - total_budget}]
@@ -83,19 +105,8 @@ if submitted:
 
     if mode == "Max Reach (при бюджеті)":
         def objective_maxreach(budgets):
-            total_b = np.sum(budgets)
-            if total_b == 0:
-                return float('inf')
-            
-            reach = total_reach(budgets)
-            
-            budget_shares = budgets / total_b
-            eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
-            
-            # Нагорода за розподіл на ефективні інструменти
-            efficiency_reward = np.sum(budget_shares * eff_weights)
-            
-            return - (reach + lambda_balance_max_reach * efficiency_reward)
+            # Тут вже немає штрафу за баланс, оскільки розподіл задається початковою логікою
+            return -total_reach(budgets)
 
         res = minimize(objective_maxreach, x0=x0, bounds=bounds, constraints=constraints, method='SLSQP')
 
