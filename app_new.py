@@ -1,15 +1,14 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from scipy.optimize import minimize
 import io
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import numbers
 
-st.set_page_config(page_title="Digital Split Optimizer", layout="wide")
-st.title("Digital Split Optimizer – 4 варіанти")
+st.set_page_config(page_title="Digital Split Classifier", layout="wide")
+st.title("Digital Split Classifier – Класифікація за CPM")
 
 # ==== Налаштування ====
 num_instruments = st.number_input("Кількість інструментів:", min_value=1, max_value=50, value=20, step=1)
@@ -44,158 +43,100 @@ if submitted:
     
     df["Efficiency"] = 1000 / (df["CPM"] * df["Freq"])
     df["CPR"] = (df["CPM"] / 1000) * (df["Freq"] * total_audience) / total_audience
-    df = df.sort_values(by="CPR", ascending=True).reset_index(drop=True)
     
-    x0 = df["MinShare"].values * total_budget + \
-         (df["MaxShare"].values - df["MinShare"].values) * total_budget / len(df)
-    bounds = [(df.loc[i, "MinShare"] * total_budget, df.loc[i, "MaxShare"] * total_budget) for i in range(len(df))]
+    # Сортування за CPM для класифікації
+    df = df.sort_values(by="CPM", ascending=True).reset_index(drop=True)
     
-    def total_reach(budgets, df_current):
-        impressions = budgets / df_current["CPM"].values * 1000
-        reach_i = np.clip(impressions / total_audience, 0, 1)
-        return 1 - np.prod(1 - reach_i)
+    # Класифікація інструментів
+    df['Tier'] = 'Інші'
+    if len(df) >= 3:
+        df.loc[df.index[:3], 'Tier'] = 'Найвищий пріоритет'
+    if len(df) >= 6:
+        df.loc[df.index[3:6], 'Tier'] = 'Середній пріоритет'
 
-    def calculate_results(df_to_calc, budgets, total_budget_calc=None):
-        df_to_calc["Budget"] = budgets
-        
-        if total_budget_calc is None:
-            total_budget_calc = df_to_calc["Budget"].sum()
-        
-        df_to_calc["BudgetSharePct"] = df_to_calc["Budget"] / total_budget_calc
-        df_to_calc["Impressions"] = df_to_calc["Budget"] / df_to_calc["CPM"] * 1000
-        df_to_calc["Unique Reach (People)"] = df_to_calc["Impressions"] / df_to_calc["Freq"]
-        df_to_calc["ReachPct"] = df_to_calc["Impressions"] / total_audience
-        df_to_calc["ReachPct"] = df_to_calc["ReachPct"].clip(upper=1.0)
-        total_reach_prob = total_reach(df_to_calc["Budget"].values, df_to_calc)
-        
-        return df_to_calc, total_reach_prob
-
-    results = {}
-    display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Efficiency", "CPR", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
+    # Розрахунок бюджету
+    df['Budget'] = 0.0
     
-    # ==== Варіант 1: Найдешевший спліт (залежність від CPM/CPR) ====
-    st.subheader("1. Найдешевший спліт (оптимізований)")
+    # 1. Розподіляємо мінімальний бюджет на всі інструменти
+    df['Budget'] = df['MinShare'] * total_budget
+    remaining_budget = total_budget - df['Budget'].sum()
     
-    def objective_cheapest(budgets):
-        total_b = np.sum(budgets)
-        if total_b == 0:
-            return float('inf')
+    # 2. Розподіляємо решту бюджету на пріоритетні групи
+    if remaining_budget > 0:
+        tier1_indices = df[df['Tier'] == 'Найвищий пріоритет'].index
+        tier2_indices = df[df['Tier'] == 'Середній пріоритет'].index
         
-        weighted_cpm = np.sum(budgets * df["CPM"].values) / total_b
-        return weighted_cpm
-    
-    res_cheapest = minimize(objective_cheapest, x0=x0, bounds=bounds, constraints={'type': 'eq', 'fun': lambda b: np.sum(b) - total_budget}, method='SLSQP')
-    df_cheapest, reach_cheapest = calculate_results(df.copy(), res_cheapest.x, total_budget)
-    st.write(f"Total Reach: **{reach_cheapest*100:.2f}%**")
-    st.dataframe(df_cheapest[display_cols])
-    results['Найдешевший спліт'] = df_cheapest
-    
-    # ==== Варіант 2: Спліт з відсіканням (мінімум 2 інструменти) ====
-    st.subheader("2. Спліт з відсіканням (максимальне охоплення)")
-    df_temp = df.copy()
-    num_instruments_to_keep = len(df_temp)
-    best_reach = 0
-    best_df = pd.DataFrame()
-
-    while num_instruments_to_keep >= 2:
-        df_temp = df_temp.sort_values(by="Efficiency", ascending=False)
-        df_temp = df_temp.head(num_instruments_to_keep)
+        # Визначаємо, скільки ще можна виділити бюджету на кожну групу
+        tier1_allocatable_budget = np.sum(df.loc[tier1_indices, 'MaxShare'] * total_budget - df.loc[tier1_indices, 'Budget'])
+        tier2_allocatable_budget = np.sum(df.loc[tier2_indices, 'MaxShare'] * total_budget - df.loc[tier2_indices, 'Budget'])
         
-        temp_x0 = df_temp["MinShare"].values * total_budget + (df_temp["MaxShare"].values - df_temp["MinShare"].values) * total_budget / num_instruments_to_keep
-        temp_bounds = [(df_temp.loc[i, "MinShare"] * total_budget, df_temp.loc[i, "MaxShare"] * total_budget) for i in df_temp.index]
-        temp_constraints = [{'type': 'eq', 'fun': lambda budgets: np.sum(budgets) - total_budget}]
-        
-        def objective_reach_prune(budgets):
-            return -total_reach(budgets, df_temp)
+        # Надаємо перевагу найвищому пріоритету
+        if tier1_allocatable_budget > 0:
+            tier1_to_allocate = min(remaining_budget, tier1_allocatable_budget)
             
-        res = minimize(objective_reach_prune, x0=temp_x0, bounds=temp_bounds, constraints=temp_constraints, method='SLSQP')
+            # Пропорційно розподіляємо між інструментами Tier 1
+            if tier1_to_allocate > 0:
+                tier1_budget_shares = (df.loc[tier1_indices, 'MaxShare'] - df.loc[tier1_indices, 'MinShare'])
+                tier1_budget_shares_norm = tier1_budget_shares / tier1_budget_shares.sum()
+                df.loc[tier1_indices, 'Budget'] += tier1_budget_shares_norm * tier1_to_allocate
+            
+            remaining_budget -= tier1_to_allocate
         
-        if res.success:
-            current_reach = total_reach(res.x, df_temp)
-            if current_reach > best_reach:
-                best_reach = current_reach
-                best_df = df_temp.copy()
-                best_df["Budget"] = res.x
+        # Розподіляємо решту на середній пріоритет
+        if remaining_budget > 0 and tier2_allocatable_budget > 0:
+            tier2_to_allocate = min(remaining_budget, tier2_allocatable_budget)
+            
+            # Пропорційно розподіляємо між інструментами Tier 2
+            if tier2_to_allocate > 0:
+                tier2_budget_shares = (df.loc[tier2_indices, 'MaxShare'] - df.loc[tier2_indices, 'MinShare'])
+                tier2_budget_shares_norm = tier2_budget_shares / tier2_budget_shares.sum()
+                df.loc[tier2_indices, 'Budget'] += tier2_budget_shares_norm * tier2_to_allocate
                 
-        num_instruments_to_keep -= 1
-        
-    if not best_df.empty:
-        df_pruned, reach_pruned = calculate_results(best_df.copy(), best_df["Budget"].values, total_budget)
-        st.write(f"Total Reach: **{reach_pruned*100:.2f}%**")
-        st.dataframe(df_pruned[display_cols])
-        results['Спліт з відсіканням'] = df_pruned
-    else:
-        st.error("Не вдалося знайти оптимальний спліт з відсіканням.")
+            remaining_budget -= tier2_to_allocate
+            
+    # Фінальний розрахунок метрик
+    df["BudgetSharePct"] = df["Budget"] / total_budget
+    df["Impressions"] = df["Budget"] / df["CPM"] * 1000
+    df["Unique Reach (People)"] = df["Impressions"] / df["Freq"]
+    df["ReachPct"] = df["Unique Reach (People)"] / total_audience
+    df["ReachPct"] = df["ReachPct"].clip(upper=1.0)
+    
+    total_reach_prob = 1 - np.prod(1 - df["ReachPct"])
+    total_reach_people = total_reach_prob * total_audience
 
-    # ==== Варіант 3: Максимальне охоплення (ідеальний спліт) ====
-    st.subheader("3. Максимальне охоплення (ідеальний спліт)")
-    def objective_max_reach_unconstrained(budgets):
-        return -total_reach(budgets, df)
+    st.subheader("Результат класифікованого розподілу")
+    st.write(f"Total Reach: **{total_reach_prob*100:.2f}%**")
     
-    x0_ideal = df["MinShare"].values * 10000 
-    bounds_ideal = [(df.loc[i, "MinShare"] * total_budget, None) for i in range(len(df))]
-    
-    res_ideal = minimize(objective_max_reach_unconstrained, x0=x0_ideal, bounds=bounds_ideal, method='SLSQP')
-    
-    df_ideal, total_reach_prob_ideal = calculate_results(df.copy(), res_ideal.x)
-    
-    st.write(f"Total Reach: **{total_reach_prob_ideal*100:.2f}%**")
-    st.write(f"**Бюджет для досягнення ідеального охоплення:** **{df_ideal['Budget'].sum():.2f}$**")
-    st.dataframe(df_ideal[display_cols])
-    results['Максимальне охоплення'] = df_ideal
-    
-    # ==== Варіант 4: Пропорційний (за CPM) спліт ====
-    st.subheader("4. Пропорційний (за CPM) спліт")
-    
-    df_proportional = df.copy()
-    
-    df_proportional['CPM_Inverse'] = 1 / df_proportional['CPM']
-    total_cpm_inverse = df_proportional['CPM_Inverse'].sum()
-    df_proportional['TargetShare'] = df_proportional['CPM_Inverse'] / total_cpm_inverse
-    
-    budgets_prop = df_proportional['TargetShare'] * total_budget
-    
-    df_proportional, reach_proportional = calculate_results(df_proportional, budgets_prop, total_budget)
-    
-    st.write(f"Total Reach: **{reach_proportional*100:.2f}%**")
-    st.dataframe(df_proportional[display_cols])
-    results['Пропорційний спліт'] = df_proportional
-    
+    display_cols = ["Instrument", "CPM", "Tier", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
+    st.dataframe(df[display_cols])
+
     # ==== Завантаження результатів у Excel ====
     output = io.BytesIO()
     wb = Workbook()
-
-    for sheet_name, result_df in results.items():
-        ws = wb.create_sheet(title=sheet_name)
-        for r in dataframe_to_rows(result_df[display_cols], index=False, header=True):
-            ws.append(r)
-        
-        total_budget_sum = result_df["Budget"].sum()
-        total_impressions_sum = result_df["Impressions"].sum()
-        total_reach_prob = total_reach(result_df["Budget"].values, result_df)
-        total_reach_people = total_reach_prob * total_audience
-        
-        ws.append([])
-        ws.append(["TOTAL", "", "", "", "", "", "", total_budget_sum, 1.0, total_impressions_sum, np.sum(result_df["Unique Reach (People)"]), f"{total_reach_prob*100:.2f}%"])
-        ws.append(["TOTAL PEOPLE", "", "", "", "", "", "", "", "", int(total_reach_people), ""])
-        
-        for row in ws.iter_rows(min_row=2, max_row=1+len(result_df), min_col=9, max_col=9):
-            for cell in row:
-                cell.number_format = '0.00%'
-                
-        chart = BarChart()
-        chart.type = "col"
-        chart.title = f"Бюджет по інструментам (%) - {sheet_name}"
-        chart.y_axis.title = "Budget Share (%)"
-        chart.x_axis.title = "Інструменти"
-        data = Reference(ws, min_col=9, min_row=1, max_row=1+len(result_df))
-        categories = Reference(ws, min_col=1, min_row=2, max_row=1+len(result_df))
-        chart.add_data(data, titles_from_data=True)
-        chart.set_categories(categories)
-        ws.add_chart(chart, "L2")
-
-    if 'Sheet' in wb.sheetnames:
-        del wb['Sheet']
+    ws = wb.active
+    ws.title = "Класифікований спліт"
+    
+    for r in dataframe_to_rows(df[display_cols], index=False, header=True):
+        ws.append(r)
+    
+    ws.append([])
+    ws.append(["TOTAL", "", "", "", "", df["Budget"].sum(), 1.0, df["Impressions"].sum(), df["Unique Reach (People)"].sum(), f"{total_reach_prob*100:.2f}%"])
+    ws.append(["TOTAL PEOPLE", "", "", "", "", "", "", "", int(total_reach_people), ""])
+    
+    for row in ws.iter_rows(min_row=2, max_row=1+len(df), min_col=7, max_col=7):
+        for cell in row:
+            cell.number_format = '0.00%'
+            
+    chart = BarChart()
+    chart.type = "col"
+    chart.title = "Бюджет по інструментам (%)"
+    chart.y_axis.title = "Budget Share (%)"
+    chart.x_axis.title = "Інструменти"
+    data = Reference(ws, min_col=7, min_row=1, max_row=1+len(df))
+    categories = Reference(ws, min_col=1, min_row=2, max_row=1+len(df))
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(categories)
+    ws.add_chart(chart, "L2")
 
     wb.save(output)
     output.seek(0)
@@ -203,6 +144,6 @@ if submitted:
     st.download_button(
         label="Завантажити результати (Excel)",
         data=output,
-        file_name="Digital_Split_4_Options.xlsx",
+        file_name="Digital_Split_Classified.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
