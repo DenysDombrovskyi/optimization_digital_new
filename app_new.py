@@ -60,11 +60,10 @@ if submitted:
         bounds = [(df.loc[i, "MinShare"] * total_budget, df.loc[i, "MaxShare"] * total_budget) for i in range(len(df))]
         
     else: # Min Cost (при охопленні)
-        # Створюємо початкове значення, де бюджет розподіляється за рангом CPR
         cpr_weights = (1 / df["CPR"]).values
         cpr_weights_normalized = cpr_weights / cpr_weights.sum()
         
-        # Початкове значення x0, що ігнорує Min/MaxShare, щоб дати оптимізатору сильний сигнал
+        # Забезпечуємо, щоб початковий розподіл був нерівномірним
         x0 = cpr_weights_normalized * total_budget
         
         # Межі залишаються на основі MinShare та MaxShare
@@ -97,7 +96,7 @@ if submitted:
             cpr_weights_normalized = (1 / df["CPR"]).values / (1 / df["CPR"]).sum()
             balance_penalty = np.sum((budget_shares - cpr_weights_normalized)**2)
             
-            # Оновлена цільова функція: мінімізуємо суму бюджетів + штраф
+            # Вага штрафу залежить від загального бюджету
             return total_b + lambda_balance * total_b * balance_penalty
         
         def constraint_reach(budgets):
