@@ -101,9 +101,18 @@ if submitted:
         
         def constraint_reach(budgets):
             return total_reach(budgets) - target_reach
-
+            
+        # Нове обмеження: частка кожного інструменту не може перевищувати MaxShare
         cons = [{'type': 'ineq', 'fun': constraint_reach}]
-        
+        for i in range(len(df)):
+            max_share = df.loc[i, "MaxShare"]
+            def constraint_max_share(budgets, i=i, max_share=max_share):
+                if np.sum(budgets) == 0:
+                    return 1.0 # Завжди повертаємо позитивне значення, якщо бюджет нульовий
+                return max_share - (budgets[i] / np.sum(budgets))
+            
+            cons.append({'type': 'ineq', 'fun': constraint_max_share})
+
         res = minimize(objective_min_budget_with_balance, x0=x0, bounds=bounds, constraints=cons, method='SLSQP', options={'disp': False})
 
     if res.success:
