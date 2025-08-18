@@ -15,8 +15,13 @@ st.title("Digital Split Optimizer – Max Reach + Min Cost оновлений")
 num_instruments = st.number_input("Кількість інструментів:", min_value=1, max_value=50, value=20, step=1)
 total_audience = st.number_input("Загальний розмір потенційної аудиторії:", value=50000, step=1000)
 mode = st.radio("Режим оптимізації:", ["Max Reach (при бюджеті)", "Min Cost (при охопленні)"])
-total_budget = st.number_input("Заданий бюджет ($):", value=100000, step=1000)
-if mode == "Min Cost (при охопленні)":
+
+if mode == "Max Reach (при бюджеті)":
+    total_budget = st.number_input("Заданий бюджет ($):", value=100000, step=1000)
+    lambda_balance_max_reach = st.slider("Коефіцієнт ефективності (0 - збалансований, 1 - пріоритет найефективнішим):",
+                                         min_value=0.0, max_value=1.0, value=0.1, step=0.01)
+else:
+    total_budget = st.number_input("Максимальний бюджет ($):", value=100000, step=1000)
     target_reach = st.number_input("Цільове охоплення (0-1):", value=0.8, step=0.01)
     lambda_balance = st.slider("Коефіцієнт балансу (0 - менш збалансований, 1 - більш збалансований):",
                                min_value=0.0, max_value=1.0, value=0.1, step=0.01)
@@ -59,7 +64,6 @@ if submitted:
              (df["MaxShare"].values - df["MinShare"].values) * total_budget * eff_weights
         bounds = [(df.loc[i, "MinShare"] * total_budget, df.loc[i, "MaxShare"] * total_budget) for i in range(len(df))]
         
-        # Обмеження на суму бюджетів, щоб вона дорівнювала total_budget
         constraints = [{'type': 'eq', 'fun': lambda budgets: np.sum(budgets) - total_budget}]
         
     else: # Min Cost (при охопленні)
@@ -78,11 +82,20 @@ if submitted:
         return 1 - np.prod(1 - reach_i)
 
     if mode == "Max Reach (при бюджеті)":
-        lambda_balance_max_reach = 0.2
         def objective_maxreach(budgets):
+            total_b = np.sum(budgets)
+            if total_b == 0:
+                return float('inf')
+            
+            reach = total_reach(budgets)
+            
+            budget_shares = budgets / total_b
             eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
-            balance_penalty = np.sum((budgets / np.sum(budgets) - eff_weights)**2)
-            return - (total_reach(budgets) - lambda_balance_max_reach * balance_penalty)
+            
+            # Нагорода за розподіл на ефективні інструменти
+            efficiency_reward = np.sum(budget_shares * eff_weights)
+            
+            return - (reach + lambda_balance_max_reach * efficiency_reward)
 
         res = minimize(objective_maxreach, x0=x0, bounds=bounds, constraints=constraints, method='SLSQP')
 
