@@ -64,7 +64,7 @@ if submitted:
 
         res = minimize(objective_maxreach, x0=x0, bounds=bounds, method='SLSQP')
 
-    else:  # Min Cost (при охопленні) – мінімальний бюджет з урахуванням ефективності
+    else:  # Min Cost (при охопленні)
         lambda_eff_penalty = 0.1
 
         def objective_min_budget(budgets):
@@ -72,6 +72,7 @@ if submitted:
             weights = budgets / total if total > 0 else np.zeros_like(budgets)
             eff_penalty = np.sum((weights - eff_weights)**2)
             return total + lambda_eff_penalty * eff_penalty
+
         def constraint_reach(budgets):
             return total_reach(budgets) - target_reach
 
@@ -83,6 +84,8 @@ if submitted:
         df["Impressions"] = df["Budget"] / df["CPM"] * 1000
     else:
         st.error("Не вдалося знайти оптимальний спліт")
+        df["Budget"] = 0.0
+        df["Impressions"] = 0.0
 
     df["BudgetSharePct"] = df["Budget"] / df["Budget"].sum()
     df["ReachPct"] = df["Impressions"] / total_audience
@@ -90,7 +93,7 @@ if submitted:
     total_reach_prob = 1 - np.prod(1 - df["ReachPct"])
     total_reach_people = total_reach_prob * total_audience
 
-    display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "ReachPct"]
+    display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Efficiency", "Budget", "BudgetSharePct", "Impressions", "ReachPct"]
     st.subheader(f"Розрахунок спліту (Total Audience={total_audience})")
     st.dataframe(df[display_cols])
     st.write(f"Total Reach (ймовірність): {total_reach_prob*100:.2f}%")
@@ -109,10 +112,10 @@ if submitted:
     total_budget_sum = df["Budget"].sum()
     total_impressions_sum = df["Impressions"].sum()
     ws.append([])
-    ws.append(["TOTAL", "", "", "", "", total_budget_sum, 1.0, total_impressions_sum, f"{total_reach_prob*100:.2f}%"])
+    ws.append(["TOTAL", "", "", "", "", "", total_budget_sum, 1.0, total_impressions_sum, f"{total_reach_prob*100:.2f}%"])
     ws.append(["TOTAL PEOPLE", "", "", "", "", "", "", "", int(total_reach_people)])
 
-    for row in ws.iter_rows(min_row=2, max_row=1+len(df), min_col=7, max_col=7):
+    for row in ws.iter_rows(min_row=2, max_row=1+len(df), min_col=8, max_col=8):
         for cell in row:
             cell.number_format = '0.00%'
 
@@ -121,7 +124,7 @@ if submitted:
     chart.title = "Бюджет по інструментам (%)"
     chart.y_axis.title = "Budget Share (%)"
     chart.x_axis.title = "Інструменти"
-    data = Reference(ws, min_col=7, min_row=1, max_row=1+len(df))
+    data = Reference(ws, min_col=8, min_row=1, max_row=1+len(df))
     categories = Reference(ws, min_col=1, min_row=2, max_row=1+len(df))
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(categories)
@@ -137,5 +140,6 @@ if submitted:
         file_name="Digital_Split_Result.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
     
