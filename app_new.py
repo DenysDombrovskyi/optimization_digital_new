@@ -71,8 +71,12 @@ if submitted:
     # Ітеративне коригування, щоб дотриматися MinShare та MaxShare
     for _ in range(10):  # Виконуємо кілька ітерацій для стабільності
         
+        # Обчислюємо поточні частки перед кожною перевіркою
+        df_result['BudgetSharePct'] = df_result['Budget'] / total_budget
+        
         # Обробка інструментів, що виходять за межі MinShare
         min_breach_indices = df_result[df_result['BudgetSharePct'] < df_result['MinShare']].index
+        
         if not min_breach_indices.empty:
             df_result.loc[min_breach_indices, 'Budget'] = df_result.loc[min_breach_indices, 'MinShare'] * total_budget
             
@@ -92,6 +96,8 @@ if submitted:
             free_ideal_shares = df_result.loc[free_indices, 'IdealShare']
             free_ideal_shares_norm = free_ideal_shares / free_ideal_shares.sum()
             df_result.loc[free_indices, 'Budget'] += free_ideal_shares_norm * remaining_budget
+        else:
+            break
 
     # Фінальний розрахунок метрик
     df_result["BudgetSharePct"] = df_result["Budget"] / total_budget
