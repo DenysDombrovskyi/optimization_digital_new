@@ -9,7 +9,7 @@ from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import numbers
 
 st.set_page_config(page_title="Digital Split Optimizer", layout="wide")
-st.title("Digital Split Optimizer – Плавне зниження долей")
+st.title("Digital Split Optimizer – Гібридний спліт")
 
 # ==== Налаштування ====
 num_instruments = st.number_input("Кількість інструментів:", min_value=1, max_value=50, value=20, step=1)
@@ -50,54 +50,56 @@ if submitted:
         impressions = budgets / df_current["CPM"].values * 1000
         reach_i = np.clip(impressions / total_audience, 0, 1)
         return 1 - np.prod(1 - reach_i)
-    
-    # Визначення ідеальних долей за допомогою експоненційного спадання
-    # Використовуємо індекс як "ранг" для плавного зниження
-    ranks = np.arange(1, len(df) + 1)
-    
-    # Параметр a контролює швидкість спадання. Вищий a -> крутіше падіння.
-    # Я обрав a=2 для помітного, але не надто різкого спадання
-    a = 2
-    ideal_shares = 1 / (ranks ** a)
-    
-    # Нормалізація ідеальних долей
-    ideal_shares_norm = ideal_shares / ideal_shares.sum()
-    
-    # Розрахунок бюджету на основі ідеальних долей та Min/Max обмежень
+
+    # Розподіл бюджету за гібридним алгоритмом
     df_result = df.copy()
-    df_result['IdealShare'] = ideal_shares_norm
-    df_result['Budget'] = df_result['IdealShare'] * total_budget
     
-    # Ітеративне коригування, щоб дотриматися MinShare та MaxShare
-    for _ in range(10):  # Виконуємо кілька ітерацій для стабільності
+    # 1. Виділення груп
+    num_top_instruments = min(10, len(df_result))
+    top_10_df = df_result.iloc[:num_top_instruments]
+    rest_df = df_result.iloc[num_top_instruments:]
+    
+    # 2. Розрахунок бюджету для групи "rest"
+    # Спочатку, виділяємо мінімальний бюджет для всіх інструментів
+    df_result['Budget'] = df_result['MinShare'] * total_budget
+    
+    # Розрахунок доступного бюджету для розподілу
+    remaining_budget = total_budget - df_result['Budget'].sum()
+
+    # 3. Розподіл додаткового бюджету на групу "top_10"
+    if not top_10_df.empty and remaining_budget > 0:
         
-        # Обчислюємо поточні частки перед кожною перевіркою
-        df_result['BudgetSharePct'] = df_result['Budget'] / total_budget
+        # Створюємо цільові долі на основі ранжування CPM
+        ranks = np.arange(1, len(top_10_df) + 1)
+        ideal_shares = 1 / ranks
+        ideal_shares_norm = ideal_shares / ideal_shares.sum()
         
-        # Обробка інструментів, що виходять за межі MinShare
-        min_breach_indices = df_result[df_result['BudgetSharePct'] < df_result['MinShare']].index
+        # Обчислюємо скільки бюджету можна додати, враховуючи MaxShare
+        top_10_max_budget = top_10_df['MaxShare'] * total_budget
+        top_10_available_budget = top_10_max_budget - top_10_df['Budget']
         
-        if not min_breach_indices.empty:
-            df_result.loc[min_breach_indices, 'Budget'] = df_result.loc[min_breach_indices, 'MinShare'] * total_budget
+        # Оптимізуємо розподіл всередині top_10
+        top_10_allocatable_budget = top_10_available_budget.sum()
+        to_allocate_to_top10 = min(remaining_budget, top_10_allocatable_budget)
+        
+        if to_allocate_to_top10 > 0:
+            top_10_budget_share = ideal_shares_norm * to_allocate_to_top10
             
-        # Обробка інструментів, що виходять за межі MaxShare
-        max_breach_indices = df_result[df_result['BudgetSharePct'] > df_result['MaxShare']].index
-        if not max_breach_indices.empty:
-            df_result.loc[max_breach_indices, 'Budget'] = df_result.loc[max_breach_indices, 'MaxShare'] * total_budget
+            # Додаємо бюджет, але не перевищуємо MaxShare
+            df_result.loc[top_10_df.index, 'Budget'] += np.minimum(top_10_budget_share.values, top_10_available_budget.values)
+            
+            remaining_budget = total_budget - df_result['Budget'].sum()
+            
+    # 4. Рівномірний розподіл залишку на групу "rest"
+    if not rest_df.empty and remaining_budget > 0:
+        # Визначаємо інструменти, які можуть отримати додатковий бюджет
+        rest_available_indices = rest_df[rest_df['Budget'] < rest_df['MaxShare'] * total_budget].index
         
-        # Перерозподіл залишку
-        current_total_budget = df_result['Budget'].sum()
-        remaining_budget = total_budget - current_total_budget
-        
-        # Визначення інструментів, які ще не досягли своїх Min/Max
-        free_indices = df_result[(df_result['BudgetSharePct'] > df_result['MinShare']) & (df_result['BudgetSharePct'] < df_result['MaxShare'])].index
-        
-        if len(free_indices) > 0 and abs(remaining_budget) > 0.01:
-            free_ideal_shares = df_result.loc[free_indices, 'IdealShare']
-            free_ideal_shares_norm = free_ideal_shares / free_ideal_shares.sum()
-            df_result.loc[free_indices, 'Budget'] += free_ideal_shares_norm * remaining_budget
-        else:
-            break
+        if len(rest_available_indices) > 0:
+            uniform_share = remaining_budget / len(rest_available_indices)
+            
+            # Додаємо рівномірно, але не перевищуємо MaxShare
+            df_result.loc[rest_available_indices, 'Budget'] += np.minimum(uniform_share, df_result.loc[rest_available_indices, 'MaxShare'] * total_budget - df_result.loc[rest_available_indices, 'Budget'])
 
     # Фінальний розрахунок метрик
     df_result["BudgetSharePct"] = df_result["Budget"] / total_budget
@@ -109,7 +111,7 @@ if submitted:
     total_reach_prob = total_reach(df_result["Budget"].values, df_result)
     total_reach_people = total_reach_prob * total_audience
 
-    st.subheader("Оптимальний спліт з плавним зниженням")
+    st.subheader("Гібридний спліт (Топ-10 з ранжуванням + рівномірний)")
     st.write(f"Total Reach: **{total_reach_prob*100:.2f}%**")
     
     display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
@@ -119,7 +121,7 @@ if submitted:
     output = io.BytesIO()
     wb = Workbook()
     ws = wb.active
-    ws.title = "Плавний спліт"
+    ws.title = "Гібридний спліт"
     
     for r in dataframe_to_rows(df_result[display_cols], index=False, header=True):
         ws.append(r)
@@ -149,6 +151,6 @@ if submitted:
     st.download_button(
         label="Завантажити результати (Excel)",
         data=output,
-        file_name="Digital_Split_Smooth.xlsx",
+        file_name="Digital_Split_Hybrid.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
