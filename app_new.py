@@ -63,18 +63,18 @@ if submitted:
     # 3. Розрахунок доступного бюджету для розподілу між іншими інструментами
     remaining_budget = total_budget - df_result['Budget'].sum()
 
-    # 4. Розподіл залишку на основі CPM для всіх, хто не досяг максимуму
+    # 4. Розподіл залишку на основі різниці CPM для всіх, хто не досяг максимуму
     if remaining_budget > 0:
         
-        # Визначаємо інструменти, які можуть отримати додатковий бюджет
         indices_to_distribute_to = df_result.index[df_result['Budget'] < df_result['MaxShare'] * total_budget]
         
         if len(indices_to_distribute_to) > 0:
             
-            # **Оновлена логіка:** динамічне ранжування на основі відносної ефективності
             cheapest_cpm = df_result.loc[cheapest_instrument_index, 'CPM']
-            # Розраховуємо "ідеальні" частки на основі відносної ефективності
-            ideal_shares = 1 / (1 + (df_result.loc[indices_to_distribute_to, 'CPM'] - cheapest_cpm) / cheapest_cpm)
+            
+            cpm_difference = df_result.loc[indices_to_distribute_to, 'CPM'] - cheapest_cpm
+            ideal_shares = 1 / (cpm_difference + 1)
+            
             ideal_shares_norm = ideal_shares / ideal_shares.sum()
             
             available_budget = (df_result.loc[indices_to_distribute_to, 'MaxShare'] * total_budget - df_result.loc[indices_to_distribute_to, 'Budget'])
@@ -86,10 +86,10 @@ if submitted:
                 
                 df_result.loc[indices_to_distribute_to, 'Budget'] += np.minimum(budget_share.values, available_budget.values)
                 
-                remaining_budget = total_budget - df_result['Budget'].sum()
+    # 5. Фінальне перезважування для отримання 100%
+    df_result["BudgetSharePct"] = df_result["Budget"] / df_result["Budget"].sum()
 
-    # Фінальний розрахунок метрик
-    df_result["BudgetSharePct"] = df_result["Budget"] / total_budget
+    # Фінальний розрахунок інших метрик
     df_result["Impressions"] = df_result["Budget"] / df_result["CPM"] * 1000
     df_result["Unique Reach (People)"] = df_result["Impressions"] / df_result["Freq"]
     df_result["ReachPct"] = df_result["Unique Reach (People)"] / total_audience
@@ -98,7 +98,7 @@ if submitted:
     total_reach_prob = total_reach(df_result["Budget"].values, df_result)
     total_reach_people = total_reach_prob * total_audience
 
-    st.subheader("Гібридний спліт (Динамічний розподіл за відносною ефективністю)")
+    st.subheader("Гібридний спліт (Фінальне перезважування)")
     st.write(f"Total Reach: **{total_reach_prob*100:.2f}%**")
     
     display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
