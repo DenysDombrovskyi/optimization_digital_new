@@ -51,18 +51,15 @@ if submitted:
         eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
         x0 = df["MinShare"].values * total_budget + \
              (df["MaxShare"].values - df["MinShare"].values) * total_budget * eff_weights
+        bounds = [(df.loc[i, "MinShare"] * total_budget, df.loc[i, "MaxShare"] * total_budget) for i in range(len(df))]
+        
     else: # Min Cost (при охопленні)
         # Більш гнучке початкове значення для Min Cost
-        # Воно буде пропорційне ефективності
         eff_weights = df["Efficiency"].values / df["Efficiency"].sum()
-        min_budget_sum = (df["MinShare"].values * total_budget).sum()
-        if min_budget_sum > total_budget:
-            x0 = df["MinShare"].values * total_budget
-        else:
-            remaining_budget = total_budget - min_budget_sum
-            x0 = df["MinShare"].values * total_budget + eff_weights * remaining_budget
-
-    bounds = [(df.loc[i, "MinShare"] * total_budget, df.loc[i, "MaxShare"] * total_budget) for i in range(len(df))]
+        min_budgets = df["MinShare"].values * total_budget
+        max_budgets = df["MaxShare"].values * total_budget
+        x0 = (min_budgets + max_budgets) / 2 # Починаємо з середини діапазону
+        bounds = list(zip(min_budgets, max_budgets))
 
     def total_reach(budgets):
         impressions = budgets / df["CPM"].values * 1000
@@ -85,11 +82,6 @@ if submitted:
             return total_reach(budgets) - target_reach
 
         cons = [{'type': 'ineq', 'fun': constraint_reach}]
-        
-        # Перераховуємо bounds, щоб вони відповідали режиму min_cost, де total_budget - це просто верхня межа
-        min_budgets = df["MinShare"].values * total_budget
-        max_budgets = df["MaxShare"].values * total_budget
-        bounds = [(min_budgets[i], max_budgets[i]) for i in range(len(df))]
 
         res = minimize(objective_min_budget, x0=x0, bounds=bounds, constraints=cons, method='SLSQP', options={'disp': False})
 
