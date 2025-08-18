@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -65,25 +64,24 @@ if submitted:
         res = minimize(objective_maxreach, x0=x0, bounds=bounds, method='SLSQP')
 
     else:  # Min Cost (при охопленні)
-        lambda_eff_penalty = 0.1
-
         def objective_min_budget(budgets):
-            total = np.sum(budgets)
-            weights = budgets / total if total > 0 else np.zeros_like(budgets)
-            eff_penalty = np.sum((weights - eff_weights)**2)
-            return total + lambda_eff_penalty * eff_penalty
+            return np.sum(budgets)
 
         def constraint_reach(budgets):
+            # Перевіряємо, чи досягнуто цільове охоплення
             return total_reach(budgets) - target_reach
 
+        # Обмеження накладаємо на нерівність, що охоплення має бути більше або дорівнювати цільовому
         cons = [{'type': 'ineq', 'fun': constraint_reach}]
+        
+        # Використовуємо SLSQP з обмеженнями
         res = minimize(objective_min_budget, x0=x0, bounds=bounds, constraints=cons, method='SLSQP', options={'disp': False})
 
     if res.success:
         df["Budget"] = res.x
         df["Impressions"] = df["Budget"] / df["CPM"] * 1000
     else:
-        st.error("Не вдалося знайти оптимальний спліт")
+        st.error("Не вдалося знайти оптимальний спліт. Спробуйте змінити початкові дані (наприклад, цільове охоплення чи частки інструментів).")
         df["Budget"] = 0.0
         df["Impressions"] = 0.0
 
@@ -140,6 +138,5 @@ if submitted:
         file_name="Digital_Split_Result.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
 
     
