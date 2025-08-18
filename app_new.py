@@ -8,7 +8,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import numbers
 
-st.set_page_config(page_title="Digital Split Optimizer", layout="wide")
+st.set_page_page_config(page_title="Digital Split Optimizer", layout="wide")
 st.title("Digital Split Optimizer – Max Reach + Min Cost оновлений")
 
 # ==== Налаштування ====
@@ -96,8 +96,8 @@ if submitted:
             cpr_weights_normalized = (1 / df["CPR"]).values / (1 / df["CPR"]).sum()
             balance_penalty = np.sum((budget_shares - cpr_weights_normalized)**2)
             
-            # Вага штрафу залежить від загального бюджету
-            return total_b + lambda_balance * total_b * balance_penalty
+            # Вага штрафу тепер не залежить від загального бюджету, що робить її вплив постійним
+            return total_b + lambda_balance * balance_penalty * total_budget
         
         def constraint_reach(budgets):
             return total_reach(budgets) - target_reach
@@ -167,4 +167,5 @@ if submitted:
         file_name="Digital_Split_Result.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
     
