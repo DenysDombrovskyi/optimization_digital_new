@@ -9,7 +9,7 @@ from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import numbers
 
 st.set_page_config(page_title="Digital Split Optimizer", layout="wide")
-st.title("Digital Split Optimizer – Єдиний оптимальний спліт")
+st.title("Digital Split Optimizer – Плавне зниження долей")
 
 # ==== Налаштування ====
 num_instruments = st.number_input("Кількість інструментів:", min_value=1, max_value=50, value=20, step=1)
@@ -45,35 +45,56 @@ if submitted:
     df["Efficiency"] = 1000 / (df["CPM"] * df["Freq"])
     df["CPR"] = (df["CPM"] / 1000) * (df["Freq"] * total_audience) / total_audience
     df = df.sort_values(by="CPM", ascending=True).reset_index(drop=True)
-
-    # Початкові значення та обмеження для оптимізації
-    x0 = df["MinShare"].values * total_budget + \
-         (df["MaxShare"].values - df["MinShare"].values) * total_budget / len(df)
-    bounds = [(df.loc[i, "MinShare"] * total_budget, df.loc[i, "MaxShare"] * total_budget) for i in range(len(df))]
     
     def total_reach(budgets, df_current):
         impressions = budgets / df_current["CPM"].values * 1000
         reach_i = np.clip(impressions / total_audience, 0, 1)
         return 1 - np.prod(1 - reach_i)
-
-    # Нова функція оптимізації для максимального ранжування
-    def objective_ranking(budgets):
-        # Максимізуємо суму бюджетів, зважену інверсним CPM
-        # Це еквівалентно мінімізації від'ємного значення
-        return -np.sum(budgets * (1 / df["CPM"].values))
-
-    # Обмеження на загальний бюджет
-    constraints = [{'type': 'eq', 'fun': lambda b: np.sum(b) - total_budget}]
     
-    # Виконання оптимізації
-    res = minimize(objective_ranking, x0=x0, bounds=bounds, constraints=constraints, method='SLSQP')
+    # Визначення ідеальних долей за допомогою експоненційного спадання
+    # Використовуємо індекс як "ранг" для плавного зниження
+    ranks = np.arange(1, len(df) + 1)
     
-    # Обробка результатів
+    # Параметр a контролює швидкість спадання. Вищий a -> крутіше падіння.
+    # Я обрав a=2 для помітного, але не надто різкого спадання
+    a = 2
+    ideal_shares = 1 / (ranks ** a)
+    
+    # Нормалізація ідеальних долей
+    ideal_shares_norm = ideal_shares / ideal_shares.sum()
+    
+    # Розрахунок бюджету на основі ідеальних долей та Min/Max обмежень
     df_result = df.copy()
-    df_result["Budget"] = res.x if res.success else 0.0
+    df_result['IdealShare'] = ideal_shares_norm
+    df_result['Budget'] = df_result['IdealShare'] * total_budget
     
-    total_budget_final = df_result["Budget"].sum()
-    df_result["BudgetSharePct"] = df_result["Budget"] / total_budget_final
+    # Ітеративне коригування, щоб дотриматися MinShare та MaxShare
+    for _ in range(10):  # Виконуємо кілька ітерацій для стабільності
+        
+        # Обробка інструментів, що виходять за межі MinShare
+        min_breach_indices = df_result[df_result['BudgetSharePct'] < df_result['MinShare']].index
+        if not min_breach_indices.empty:
+            df_result.loc[min_breach_indices, 'Budget'] = df_result.loc[min_breach_indices, 'MinShare'] * total_budget
+            
+        # Обробка інструментів, що виходять за межі MaxShare
+        max_breach_indices = df_result[df_result['BudgetSharePct'] > df_result['MaxShare']].index
+        if not max_breach_indices.empty:
+            df_result.loc[max_breach_indices, 'Budget'] = df_result.loc[max_breach_indices, 'MaxShare'] * total_budget
+        
+        # Перерозподіл залишку
+        current_total_budget = df_result['Budget'].sum()
+        remaining_budget = total_budget - current_total_budget
+        
+        # Визначення інструментів, які ще не досягли своїх Min/Max
+        free_indices = df_result[(df_result['BudgetSharePct'] > df_result['MinShare']) & (df_result['BudgetSharePct'] < df_result['MaxShare'])].index
+        
+        if len(free_indices) > 0 and abs(remaining_budget) > 0.01:
+            free_ideal_shares = df_result.loc[free_indices, 'IdealShare']
+            free_ideal_shares_norm = free_ideal_shares / free_ideal_shares.sum()
+            df_result.loc[free_indices, 'Budget'] += free_ideal_shares_norm * remaining_budget
+
+    # Фінальний розрахунок метрик
+    df_result["BudgetSharePct"] = df_result["Budget"] / total_budget
     df_result["Impressions"] = df_result["Budget"] / df_result["CPM"] * 1000
     df_result["Unique Reach (People)"] = df_result["Impressions"] / df_result["Freq"]
     df_result["ReachPct"] = df_result["Unique Reach (People)"] / total_audience
@@ -82,7 +103,7 @@ if submitted:
     total_reach_prob = total_reach(df_result["Budget"].values, df_result)
     total_reach_people = total_reach_prob * total_audience
 
-    st.subheader("Оптимальний спліт з максимальним ранжуванням")
+    st.subheader("Оптимальний спліт з плавним зниженням")
     st.write(f"Total Reach: **{total_reach_prob*100:.2f}%**")
     
     display_cols = ["Instrument", "CPM", "Freq", "MinShare", "MaxShare", "Budget", "BudgetSharePct", "Impressions", "Unique Reach (People)", "ReachPct"]
@@ -92,7 +113,7 @@ if submitted:
     output = io.BytesIO()
     wb = Workbook()
     ws = wb.active
-    ws.title = "Оптимальний спліт"
+    ws.title = "Плавний спліт"
     
     for r in dataframe_to_rows(df_result[display_cols], index=False, header=True):
         ws.append(r)
@@ -122,6 +143,6 @@ if submitted:
     st.download_button(
         label="Завантажити результати (Excel)",
         data=output,
-        file_name="Digital_Split_Optimal.xlsx",
+        file_name="Digital_Split_Smooth.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
